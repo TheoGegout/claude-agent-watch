@@ -52,24 +52,54 @@ Mods are an early-access Claude Code feature and their API can change between re
 
 ## What you see
 
-One block per session, the ones that need you first:
+```
+◉ AGENT WATCH                                  ● 2 running  ● 1 waiting  ● 1 idle  ■ 0 ended  ⟳ Auto refresh 3s
+  Monitor your Claude Code agents in real time
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+╭──────────────────────────────────────────────────────────────────────╮    FILTERS
+│ ● Fix the checkout flow   WAITING                 since 2m 14s   ▴   │   ▌▣ 1: All sessions           4
+│ ▢ ~/projects/webshop                                                 │    ● 2: Running                2
+│ ╭──────────────────────────────╮  ╭──────────────────────────────╮   │    ● 3: Waiting                1
+│ │ ⚠ Permission / input required│  │ ● general-purpose · e2e  RUNNING │    ● 4: Idle                   1
+│ │ permission Bash · Claude is …│  │   ▸ Bash · npx playwright test │    ● 5: Ended                  0
+│ ╰──────────────────────────────╯  ╰──────────────────────────────╯   │
+╰──────────────────────────────────────────────────────────────────────╯    SETTINGS
+                                                                             ◍ Language     l: English ›
+                                                                             ◔ Notifications     n: On ›
+```
+
+| Part | Shows |
+| --- | --- |
+| **header** | how many sessions are running, waiting for you, idle or ended |
+| **cards** | one per session, the ones that need you first: a status badge, its folder, for how long; a callout when it waits for you (permission, question, plan approval); its subagents beside it with their badge, elapsed time and what they are doing. `▴` folds a card |
+| **sidebar** | from 104 columns: filters, settings that change `/config` in place, shortcuts, version. Narrower panes get the filters as one row |
+| **footer** | refresh rate, notifications, and the count of running and waiting loops across sessions |
 
 | Mark | State | Means |
 | --- | --- | --- |
-| `◆` amber | **waiting for you** | a permission dialog, a question (`AskUserQuestion`) or a plan to approve is open |
-| `●` green | **running** | the session or the subagent is working; the tool in use when known |
-| `○` grey | **idle** | the turn is over, the session waits for your next message |
-| `×` dim | **ended** | the subagent finished (kept 10 minutes), or the session closed |
+| `●` amber, `WAITING` | **waiting for you** | a permission dialog, a question (`AskUserQuestion`) or a plan to approve is open |
+| `●` green, `RUNNING` | **running** | the session or a subagent is working; the tool in use when known |
+| `●` grey, `IDLE` | **idle** | the turn is over, the session waits for your next message |
+| `●` red, `ENDED` | **ended** | the subagent finished (kept 10 minutes), or the session closed |
 
-Under each session, its subagents: their type, their task, and what they are doing. A subagent quiet on a long tool call shows `quiet for 2 min` rather than vanishing.
-
-The status line counts every running and waiting loop across sessions (`agents ▶ 3 running · ◆ 1 waiting`), and a notification pops when **another** session starts waiting for you.
+A subagent quiet on a long tool call shows `quiet for 2m 10s` rather than vanishing. The status line counts every running and waiting loop across sessions (`agents ▶ 3 running · ◆ 1 waiting`), and a notification pops when **another** session starts waiting for you.
 
 ## Use
 
 | Command | Does |
 | --- | --- |
 | `/agent-watch` | open the pane |
+
+Focus the pane with `ctrl+x tab` (or click it), then:
+
+| Key | Does |
+| --- | --- |
+| `1` … `5` | filter: all, running, waiting, idle, ended |
+| `r` | refresh now |
+| `l` | switch language (English / French) |
+| `n` | notifications on / off |
+| `s` | status line on / off |
+| `esc` | close |
 
 The pane refreshes every 3 seconds.
 

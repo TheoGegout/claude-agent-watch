@@ -1,12 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentCard, Board, LoopState, SelfStatus, SessionCard } from '../types'
+import type { AgentCard, Board, Filter, LoopState, SelfStatus, SessionCard } from '../types'
 import { STRINGS } from './strings'
 import type { Strings } from './strings'
+import { agentState, clock, drawBoard, liveState } from './view'
+import type { Kit } from './view'
 
 const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
+const VERSION = '0.2.0'
 const TICK_MS = 3000
 // A session that has not written for this long is closed (or its app is).
 const STALE_MS = 20_000
@@ -21,9 +24,12 @@ const self = atom({ plugin: 'agent-watch', key: 'self' } as const, {
   agentWaiting: {},
 })
 const board = atom({ plugin: 'agent-watch', key: 'board' } as const, { now: 0, sessions: [] })
+const filter = atom({ plugin: 'agent-watch', key: 'filter' } as const, 'all')
+const collapsed = atom({ plugin: 'agent-watch', key: 'collapsed' } as const, [])
 
 // The words shown, set from the `language` option at load.
 let t: Strings = STRINGS.en
+let language: 'en' | 'fr' = 'en'
 let notifyWaiting = true
 let showStatusLine = true
 
@@ -50,28 +56,6 @@ const describeTool = (e: { tool: string; [argument: string]: unknown }) => {
     pick('command') ||
     pick('url')
   return detail ? `${e.tool} · ${short(detail, 40)}` : e.tool
-}
-
-const ago = (ms: number) => {
-  const s = Math.max(0, Math.round(ms / 1000))
-  if (s < 60) return `${s}s`
-  const m = Math.round(s / 60)
-  return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${m % 60}`
-}
-
-const agentState = (status: string, waiting?: string): LoopState => {
-  if (waiting) return 'waiting'
-  if (status === 'running' || status === 'pending') return 'running'
-  if (status === 'waiting') return 'waiting'
-  if (status === 'idle') return 'idle'
-  return 'ended'
-}
-
-const LOOK: Record<LoopState, { mark: string; color: string }> = {
-  running: { mark: '●', color: 'success' },
-  waiting: { mark: '◆', color: 'warning' },
-  idle: { mark: '○', color: 'inactive' },
-  ended: { mark: '×', color: 'inactive' },
 }
 
 let folder = ''
@@ -181,6 +165,8 @@ function classifyTail(text: string): Verdict {
 async function scanAgents($: EngineInterface, card: Registered, now: number): Promise<AgentCard[]> {
   const dir = `${home}/.claude/projects/${projectDir(card.cwd)}/${card.sessionId}/subagents`
   const entries = await $.fs.list(dir).catch(() => [])
+  // A subagent's meta file is written once, when it is spawned.
+  const spawned = new Map(entries.filter(e => e.name.endsWith('.meta.json')).map(e => [e.name, e.mtimeMs]))
   const agents: AgentCard[] = []
   for (const entry of entries) {
     if (entry.kind !== 'file' || !entry.name.startsWith('agent-') || !entry.name.endsWith('.jsonl')) continue
@@ -209,7 +195,7 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
             : { state: quiet < 5 * 60_000 ? 'running' : 'ended' }
         tailCache.set(path, { mtimeMs: entry.mtimeMs, verdict })
       }
-      if (verdict.state === 'running' && !verdict.tool) verdict = { ...verdict, tool: t.quietFor(ago(quiet)) }
+      if (verdict.state === 'running' && !verdict.tool) verdict = { ...verdict, tool: t.quietFor(clock(quiet)) }
     }
     agents.push({
       id,
@@ -217,6 +203,8 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
       type: meta.agentType ?? 'agent',
       status: verdict.state === 'running' ? 'running' : 'completed',
       tool: verdict.tool,
+      startedAt: spawned.get(`agent-${id}.meta.json`),
+      endedAt: verdict.state === 'running' ? undefined : entry.mtimeMs,
     })
   }
   return agents.sort((a, b) => Number(a.status !== 'running') - Number(b.status !== 'running'))
@@ -252,7 +240,13 @@ async function readAll($: EngineInterface) {
         : 'idle'
     const scanned = await scanAgents($, reg, now)
     const known = isFresh ? report.agents : []
-    const agents = [...known, ...scanned.filter(a => !known.some(k => k.id === a.id))]
+    const agents = [
+      ...known.map(k => {
+        const found = scanned.find(a => a.id === k.id)
+        return found ? { ...k, startedAt: found.startedAt, endedAt: found.endedAt } : k
+      }),
+      ...scanned.filter(a => !known.some(k => k.id === a.id)),
+    ]
     sessions.push({
       sessionId: reg.sessionId,
       cwd: reg.cwd,
@@ -277,9 +271,7 @@ async function readAll($: EngineInterface) {
   }
 
   const rank: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
-  const live = (c: SessionCard) =>
-    Math.min(rank[c.state], ...c.agents.map(a => rank[agentState(a.status, a.waiting)]))
-  sessions.sort((a, b) => live(a) - live(b) || b.since - a.since)
+  sessions.sort((a, b) => rank[liveState(a)] - rank[liveState(b)] || b.since - a.since)
   await update($, board, () => ({ now, sessions }))
 
   // Status line and a toast when another session starts waiting on the person.
@@ -312,7 +304,8 @@ async function tick($: EngineInterface) {
 }
 
 export const register: Register = (on, options) => {
-  t = options.language === 'fr' ? STRINGS.fr : STRINGS.en
+  language = options.language === 'fr' ? 'fr' : 'en'
+  t = STRINGS[language]
   notifyWaiting = options.notifyWaiting !== false
   showStatusLine = options.statusLine !== false
 
@@ -415,61 +408,38 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
     const { now, sessions } = await read($, board)
-    const width = Math.max(30, e.props.bodyColumns ?? e.viewport?.columns ?? 80)
+    const width = Math.max(40, e.props.bodyColumns ?? e.viewport?.columns ?? 80)
+    const setOption = (key: string, value: string | boolean) =>
+      void $.config.set({ key: `agent-watch.${key}`, value }).catch(() => {})
 
-    if (sessions.length === 0) {
-      return <Text dimColor>{t.noSessions}</Text>
-    }
-
-    const row = (state: LoopState, head: string, detail: string | undefined, indent: string, key: string) => {
-      const look = LOOK[state]
-      return (
-        <Box key={key} flexDirection="column">
-          <Text wrap="truncate-end">
-            <Text>{indent}</Text>
-            <Text color={look.color}>{look.mark} </Text>
-            <Text bold={indent === ''}>{head}</Text>
-          </Text>
-          <Text wrap="truncate-end" dimColor>
-            {indent.replace('├', '│').replace('└', ' ')}
-            {'   '}
-            <Text color={look.color}>{t.state[state]}</Text>
-            {detail ? ` · ${detail}` : ''}
-          </Text>
-        </Box>
-      )
-    }
-
-    return (
-      <Box flexDirection="column" width={width}>
-        {sessions.map(c => {
-          const mine = c.sessionId === (sessionId || '')
-          const head = `${c.title || t.newSession}${mine ? t.here : ''} — ${baseName(c.cwd)}`
-          const detail =
-            c.state === 'waiting'
-              ? c.waiting
-              : c.state === 'running'
-                ? c.tool
-                : c.state === 'idle'
-                  ? t.idleFor(ago(now - c.since))
-                  : t.lastSeen(ago(now - c.updatedAt))
-          const forSince = c.state === 'running' || c.state === 'waiting' ? ` (${ago(now - c.since)})` : ''
-          return (
-            <Box key={c.sessionId} flexDirection="column" marginBottom={1}>
-              {row(c.state, head, `${detail ?? ''}${forSince}`.trim() || undefined, '', 'head')}
-              {c.agents.map((a, i) => {
-                const state = agentState(a.status, a.waiting)
-                const branch = i === c.agents.length - 1 ? '└ ' : '├ '
-                const depth = a.parentId ? '  ' : ''
-                const detail = state === 'ended' ? undefined : (a.waiting ?? a.tool)
-                return row(state, `${a.type} · ${short(a.label, 50)}`, detail, `  ${depth}${branch}`, a.id)
-              })}
-            </Box>
-          )
-        })}
-      </Box>
+    return drawBoard(
+      $.ui.resolve(e) as unknown as Kit,
+      {
+        now,
+        sessions,
+        filter: await read($, filter),
+        collapsed: await read($, collapsed),
+        mine: sessionId,
+        home,
+        width,
+        t,
+        version: VERSION,
+        notify: notifyWaiting,
+        statusLine: showStatusLine,
+      },
+      {
+        setFilter: (f: Filter) => void update($, filter, () => f),
+        toggle: (id: string) =>
+          void update($, collapsed, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id])),
+        refresh: () => void tick($),
+        toggleLanguage: () => setOption('language', language === 'fr' ? 'en' : 'fr'),
+        toggleNotify: () => setOption('notifyWaiting', !notifyWaiting),
+        toggleStatusLine: () => {
+          if (showStatusLine) $.ui.status(undefined)
+          setOption('statusLine', !showStatusLine)
+        },
+      },
     )
   })
 }

@@ -1,6 +1,9 @@
 /** Where a loop stands, as the panel shows it. */
 export type LoopState = 'running' | 'waiting' | 'idle' | 'ended'
 
+/** Which sessions the pane lists. */
+export type Filter = 'all' | LoopState
+
 /** One subagent or teammate of a session. */
 export type AgentCard = {
   id: string
@@ -10,6 +13,10 @@ export type AgentCard = {
   tool?: string
   waiting?: string
   parentId?: string
+  /** When it was spawned, when known. */
+  startedAt?: number
+  /** When it last wrote, for one that ended. */
+  endedAt?: number
 }
 
 /** What one session writes to the shared folder, and the panel reads back. */
@@ -41,6 +48,6 @@ export type Board = { now: number; sessions: SessionCard[] }
 
 declare module 'claude-code' {
   interface PluginState {
-    'agent-watch': { self: SelfStatus; board: Board }
+    'agent-watch': { self: SelfStatus; board: Board; filter: Filter; collapsed: string[] }
   }
 }

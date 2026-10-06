@@ -70,7 +70,7 @@ const PANE = {
   props: {
     title: 'Agents',
     isFocused: true,
-    bodyColumns: 100,
+    bodyColumns: 140,
     placement: 'dock',
     scroll: { offset: 0, bodyRows: 40 },
     view: {},
@@ -124,12 +124,17 @@ test('sessions without the mod show from the registry, with their subagents', as
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
   expect(w.own().waiting).toBe('permission Bash')
 
-  await $.turn.complete({ reason: 'answer', turnId: 't1', isAborted: false } as never)
+  await $.turn.complete({ reason: 'answer', answer: 'done', durationMs: 1000, turnId: 't1', isAborted: false })
   expect(w.own().state).toBe('idle')
 
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
-    expect(await ui.find({ text: /Checkout flow — webshop/ })).toBeDefined()
+    expect(await ui.find({ text: /Checkout flow/ })).toBeDefined()
+    expect(await ui.find({ text: /D:\/Dev\/webshop/ })).toBeDefined()
+    expect(await ui.find({ text: /Permission \/ input required/ })).toBeDefined()
+    expect(await ui.find({ text: /AGENT WATCH/ })).toBeDefined()
+    expect(await ui.find({ text: /FILTERS/ })).toBeDefined()
+    expect(await ui.find({ key: 'set-language' })).toBeDefined()
     expect(await ui.find({ text: /permission Bash/ })).toBeDefined()
     expect(await ui.find({ text: /general-purpose · Run the e2e suite/ })).toBeDefined()
     expect(await ui.find({ text: /Bash · build the app/ })).toBeDefined()
@@ -138,6 +143,18 @@ test('sessions without the mod show from the registry, with their subagents', as
     expect(await ui.find({ text: /agent · old/ })).toBeUndefined()
     await ui.unmount()
   }
+  // The filters: only the waiting session is left once pressed.
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'filter-waiting' })
+  expect(await ui.find({ text: /Checkout flow/ })).toBeDefined()
+  expect(await ui.find({ text: /Release notes/ })).toBeUndefined()
+  await ui.press({ key: 'filter-all' })
+  expect(await ui.find({ text: /Release notes/ })).toBeDefined()
+  // Folding a session hides its subagents.
+  await ui.press({ key: 'fold-other' })
+  expect(await ui.find({ text: /Run the e2e suite/ })).toBeUndefined()
+  await ui.unmount()
+
   // Mine (busy in the registry, its Explore a1), and the other's two live agents; one waits.
   expect(w.status.at(-1)).toBe('agents ▶ 4 running · ◆ 1 waiting')
 })
@@ -192,4 +209,16 @@ test('the notification and the status line can be turned off', { options: { noti
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   expect(w.toasts).toEqual([])
   expect(w.status).toEqual([])
+})
+
+test('a narrow pane drops the sidebar for a filter row', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, clock.now)
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:\\x', name: 'Narrow', status: 'idle' })
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...(PANE.props as object), bodyColumns: 60 } as never })
+  expect(await ui.find({ text: /Narrow/ })).toBeDefined()
+  expect(await ui.find({ text: /FILTERS/ })).toBeUndefined()
+  expect(await ui.find({ key: 'filter-idle' })).toBeDefined()
 })
