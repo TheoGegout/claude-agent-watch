@@ -1,18 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentCard, Board, Filter, LoopState, SelfStatus, SessionCard } from '../types'
+import type { AgentCard, AgentDetail, Board, Filter, LoopState, Route, SelfStatus, SessionCard } from '../types'
 import { STRINGS } from './strings'
 import type { Strings } from './strings'
-import { agentState, clock, drawBoard, liveState } from './view'
+import { agentState, clock, drawApp, liveState, sessionLink } from './view'
 import type { Actions, Kit, ViewModel } from './view'
-import { renderSvg } from './svg'
 
 const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
 const VERSION = '0.2.0'
-// A pane column in CSS pixels on the surfaces that draw SVG.
-const PX_PER_COLUMN = 8.3
 const TICK_MS = 3000
 // A session that has not written for this long is closed (or its app is).
 const STALE_MS = 20_000
@@ -29,6 +26,8 @@ const self = atom({ plugin: 'agent-watch', key: 'self' } as const, {
 const board = atom({ plugin: 'agent-watch', key: 'board' } as const, { now: 0, sessions: [] })
 const filter = atom({ plugin: 'agent-watch', key: 'filter' } as const, 'all')
 const collapsed = atom({ plugin: 'agent-watch', key: 'collapsed' } as const, [])
+const route = atom({ plugin: 'agent-watch', key: 'route' } as const, { view: 'list' } as Route)
+const detail = atom({ plugin: 'agent-watch', key: 'detail' } as const, null as AgentDetail | null)
 
 // The words shown, set from the `language` option at load.
 let t: Strings = STRINGS.en
@@ -119,6 +118,7 @@ type Registered = {
   startedAt?: number
   updatedAt?: number
   statusUpdatedAt?: number
+  hostSessionId?: string
 }
 type Verdict = { state: LoopState; tool?: string }
 
@@ -252,6 +252,8 @@ async function readAll($: EngineInterface) {
     ]
     sessions.push({
       sessionId: reg.sessionId,
+      hostId: reg.hostSessionId,
+      startedAt: reg.startedAt,
       cwd: reg.cwd,
       title: reg.name || report?.title || '',
       state,
@@ -299,6 +301,89 @@ async function readAll($: EngineInterface) {
     const parts = [running && t.statusRunning(running), waiting && t.statusWaiting(waiting)].filter(Boolean)
     $.ui.status(parts.length ? `agents ${parts.join(' · ')}` : undefined)
   }
+}
+
+type Entry = { type?: string; timestamp?: string; message?: { content?: unknown } }
+
+const textOf = (content: unknown): string => {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .filter((c: { type?: string; text?: unknown }) => c && c.type === 'text' && typeof c.text === 'string')
+    .map((c: { text: string }) => c.text)
+    .join('\n')
+}
+
+/** What a subagent's transcript says: its task, its last tool calls, its last words. */
+function readTranscript(first: string, tail: string[]): Omit<AgentDetail, 'agentId' | 'isLoading'> {
+  const parse = (line: string): Entry | undefined => {
+    try {
+      return JSON.parse(line) as Entry
+    } catch {
+      return undefined
+    }
+  }
+  const opening = parse(first)
+  const prompt = opening?.type === 'user' ? textOf(opening.message?.content) : ''
+  const tools: AgentDetail['tools'] = []
+  let answer = ''
+  for (const line of tail) {
+    const entry = parse(line)
+    if (entry?.type !== 'assistant' || !Array.isArray(entry.message?.content)) continue
+    const at = entry.timestamp ? new Date(entry.timestamp).toTimeString().slice(0, 8) : undefined
+    for (const block of entry.message.content as { type?: string; name?: string; input?: Record<string, unknown> }[]) {
+      if (block?.type === 'tool_use' && block.name) {
+        const full = describeTool({ tool: block.name, ...(block.input ?? {}) })
+        tools.push({ name: block.name, detail: full.slice(block.name.length + 3), at })
+      }
+    }
+    const said = textOf(entry.message.content).trim()
+    if (said) answer = said
+  }
+  return {
+    prompt: prompt ? short(prompt, 400) : undefined,
+    tools: tools.slice(-8),
+    answer: answer ? (answer.length > 1500 ? `${answer.slice(0, 1499)}…` : answer) : undefined,
+  }
+}
+
+async function loadDetail($: EngineInterface, sessionId: string, agentId: string) {
+  await update($, detail, () => ({ agentId, isLoading: true, tools: [] }))
+  const card = (await read($, board)).sessions.find(c => c.sessionId === sessionId)
+  if (!card) return
+  const path = `${home}/.claude/projects/${projectDir(card.cwd)}/${sessionId}/subagents/agent-${agentId}.jsonl`
+  try {
+    const stat = await $.fs.stat(path)
+    let lines: string[]
+    if (stat.size <= READ_LIMIT) {
+      lines = (await $.fs.read(path)).trimEnd().split('\n')
+    } else {
+      // Too big for one read: its first line and its tail, through the shell.
+      const script =
+        "$p=$env:AW_PATH; Get-Content -LiteralPath $p -TotalCount 1 -Encoding UTF8; Get-Content -LiteralPath $p -Tail 120 -Encoding UTF8"
+      const run = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
+        env: { AW_PATH: path },
+        timeoutMs: 15_000,
+      })
+      lines = run.stdout.trimEnd().split(/\r?\n/)
+    }
+    const found = readTranscript(lines[0] ?? '', lines.slice(-120))
+    await update($, detail, () => ({ agentId, isLoading: false, ...found }))
+  } catch (err) {
+    await update($, detail, () => ({ agentId, isLoading: false, tools: [], error: String(err) }))
+  }
+}
+
+/** Hands the app's deep link to the system, which gives it back to the app. */
+async function openInApp($: EngineInterface, hostId: string) {
+  const url = sessionLink(hostId)
+  const isWindows = (await $.env.get('OS')) === 'Windows_NT'
+  const argv = isWindows
+    ? ['rundll32', 'url.dll,FileProtocolHandler', url]
+    : (await $.env.get('XDG_CURRENT_DESKTOP')) !== undefined
+      ? ['xdg-open', url]
+      : ['open', url]
+  await $.process.run(argv, { timeoutMs: 10_000 }).catch(err => $.ui.toast(`agent-watch: ${err}`))
 }
 
 async function tick($: EngineInterface) {
@@ -421,18 +506,29 @@ export const register: Register = (on, options) => {
       sessions,
       filter: await read($, filter),
       collapsed: await read($, collapsed),
+      route: await read($, route),
+      detail: await read($, detail),
       mine: sessionId,
       home,
       width,
+      isTerminal: e.surface === 'terminal',
       t,
       version: VERSION,
       notify: notifyWaiting,
       statusLine: showStatusLine,
     }
     const act: Actions = {
-      setFilter: (f: Filter) => void update($, filter, () => f),
+      setFilter: (f: Filter) => {
+        void update($, route, () => ({ view: 'list' }) as Route)
+        void update($, filter, () => f)
+      },
       toggle: (id: string) =>
         void update($, collapsed, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id])),
+      go: (to: Route) => {
+        void update($, route, () => to)
+        if (to.view === 'agent') void loadDetail($, to.sessionId, to.agentId)
+      },
+      openSession: (hostId: string) => void openInApp($, hostId),
       refresh: () => void tick($),
       toggleLanguage: () => setOption('language', language === 'fr' ? 'en' : 'fr'),
       toggleNotify: () => setOption('notifyWaiting', !notifyWaiting),
@@ -442,37 +538,6 @@ export const register: Register = (on, options) => {
       },
     }
 
-    if (e.surface === 'terminal') {
-      return drawBoard($.ui.resolve(e) as unknown as Kit, vm, act)
-    }
-
-    // Surfaces that draw SVG get the dashboard as one picture, its controls as
-    // native buttons above it (an SVG takes no presses).
-    const { Box, Button, Svg } = $.ui.resolve(e)
-    const picture = renderSvg(vm, width * PX_PER_COLUMN)
-    return (
-      <Box flexDirection="column" width="100%">
-        <Box flexWrap="wrap" columnGap={1} rowGap={0}>
-          {(['all', 'running', 'waiting', 'idle', 'ended'] as const).map((f, i) => (
-            <Button
-              key={`filter-${f}`}
-              hotkey={String(i + 1)}
-              variant={vm.filter === f ? 'primary' : 'secondary'}
-              label={f === 'all' ? t.allSessions : t.filterName[f]}
-              onPress={() => act.setFilter(f)}
-            />
-          ))}
-          <Button key="refresh" hotkey="r" label={`⟳ ${t.refresh}`} onPress={act.refresh} />
-          <Button key="set-language" hotkey="l" label={t.languageName} onPress={act.toggleLanguage} />
-          <Button
-            key="set-notify"
-            hotkey="n"
-            label={`${t.notifications}: ${notifyWaiting ? t.on : t.off}`}
-            onPress={act.toggleNotify}
-          />
-        </Box>
-        <Svg source={picture.source} alt={picture.alt} />
-      </Box>
-    )
+    return drawApp($.ui.resolve(e) as unknown as Kit, vm, act)
   })
 }

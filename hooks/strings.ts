@@ -47,6 +47,23 @@ export type Strings = {
   openSource: string
   footerRefresh: string
   footerNotifications: (isOn: boolean) => string
+  back: string
+  openInApp: string
+  open: string
+  folder: string
+  stateLabel: string
+  duration: string
+  waitingReason: string
+  currentTool: string
+  sessionId: string
+  agentsTitle: (n: number) => string
+  task: string
+  lastTools: string
+  lastAnswer: string
+  loading: string
+  nothingYet: string
+  unreadable: string
+  hint: string
 }
 
 export const STRINGS: Record<'en' | 'fr', Strings> = {
@@ -96,6 +113,23 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     openSource: 'Open source · MIT License',
     footerRefresh: 'Auto refresh: 3s',
     footerNotifications: isOn => `Notifications: ${isOn ? 'enabled' : 'disabled'}`,
+    back: '← Back',
+    openInApp: 'Open in the app ↗',
+    open: 'Open ↗',
+    folder: 'Folder',
+    stateLabel: 'State',
+    duration: 'For',
+    waitingReason: 'Waiting on',
+    currentTool: 'Doing',
+    sessionId: 'Session',
+    agentsTitle: n => `SUBAGENTS · ${n}`,
+    task: 'TASK',
+    lastTools: 'LAST TOOL CALLS',
+    lastAnswer: 'LAST WORDS',
+    loading: 'Reading its transcript…',
+    nothingYet: 'Nothing yet.',
+    unreadable: 'Its transcript could not be read.',
+    hint: 'Click a session for its details, an agent for its activity.',
   },
   fr: {
     state: { running: 'en cours', waiting: 'attend ta réponse', idle: 'inactif', ended: 'terminé' },
@@ -143,5 +177,22 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     openSource: 'Open source · Licence MIT',
     footerRefresh: 'Actualisation : 3 s',
     footerNotifications: isOn => `Notifications : ${isOn ? 'activées' : 'désactivées'}`,
+    back: '← Retour',
+    openInApp: 'Ouvrir dans l’app ↗',
+    open: 'Ouvrir ↗',
+    folder: 'Dossier',
+    stateLabel: 'État',
+    duration: 'Depuis',
+    waitingReason: 'Attend',
+    currentTool: 'En train de',
+    sessionId: 'Session',
+    agentsTitle: n => `SOUS-AGENTS · ${n}`,
+    task: 'TÂCHE',
+    lastTools: 'DERNIERS OUTILS',
+    lastAnswer: 'DERNIERS MOTS',
+    loading: 'Lecture du transcript…',
+    nothingYet: 'Rien pour l’instant.',
+    unreadable: 'Impossible de lire son transcript.',
+    hint: 'Clique une session pour ses détails, un agent pour son activité.',
   },
 }

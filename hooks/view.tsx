@@ -1,9 +1,9 @@
-import type { Elements } from 'claude-code'
+import type { Elements, RenderElement } from 'claude-code'
 
-import type { AgentCard, Filter, LoopState, SessionCard } from '../types'
+import type { AgentCard, AgentDetail, Filter, LoopState, Route, SessionCard } from '../types'
 import type { Strings } from './strings'
 
-export type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button'>
+export type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Link'>
 
 /** What the pane draws from, gathered by the render hook. */
 export type ViewModel = {
@@ -11,9 +11,12 @@ export type ViewModel = {
   sessions: SessionCard[]
   filter: Filter
   collapsed: string[]
+  route: Route
+  detail: AgentDetail | null
   mine: string
   home: string
   width: number
+  isTerminal: boolean
   t: Strings
   version: string
   notify: boolean
@@ -24,24 +27,48 @@ export type ViewModel = {
 export type Actions = {
   setFilter: (filter: Filter) => void
   toggle: (sessionId: string) => void
+  go: (route: Route) => void
+  openSession: (hostId: string) => void
   refresh: () => void
   toggleLanguage: () => void
   toggleNotify: () => void
   toggleStatusLine: () => void
 }
 
-export const COLOR: Record<LoopState, string> = {
+const RANK: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
+const FILTERS: Filter[] = ['all', 'running', 'waiting', 'idle', 'ended']
+const SIDEBAR = 30
+// The pane is wide enough for the sidebar beside the cards from here.
+const WIDE = 100
+
+/** The desktop's own palette, the dashboard's; the terminal keeps its theme. */
+const HEX = {
+  running: '#3fb950',
+  waiting: '#f0a020',
+  idle: '#8c94a3',
+  ended: '#f85149',
+  accent: '#d97757',
+  text: '#e6e9ef',
+  dim: '#8c94a3',
+  faint: '#5d6574',
+  line: '#2a303c',
+  card: '#151a23',
+  panel: '#11151c',
+}
+const THEME = {
   running: 'success',
   waiting: 'warning',
   idle: 'inactive',
   ended: 'error',
+  accent: 'claude',
+  text: undefined,
+  dim: 'inactive',
+  faint: 'inactive',
+  line: 'inactive',
+  card: undefined,
+  panel: undefined,
 }
-
-const RANK: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
-const FILTERS: Filter[] = ['all', 'running', 'waiting', 'idle', 'ended']
-const SIDEBAR = 32
-// The pane is wide enough for the sidebar beside the cards from here.
-const WIDE = 104
+type Palette = Record<keyof typeof HEX, string | undefined>
 
 export const agentState = (status: string, waiting?: string): LoopState => {
   if (waiting) return 'waiting'
@@ -79,11 +106,15 @@ const prettyPath = (path: string, home: string) => {
   return home && p.toLowerCase().startsWith(home.toLowerCase()) ? `~${p.slice(home.length)}` : p
 }
 
-export function drawBoard(el: Kit, vm: ViewModel, act: Actions) {
-  const { Box, Text, Button } = el
+/** The deep link the desktop app answers by opening that session. */
+export const sessionLink = (hostId: string) => `claude://code/continue?session=${encodeURIComponent(hostId)}`
+
+export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
+  const { Box, Text, Button, Link } = el
   const { t, now } = vm
+  const P: Palette = vm.isTerminal ? THEME : HEX
   const isWide = vm.width >= WIDE
-  const main = isWide ? vm.width - SIDEBAR - 2 : vm.width
+  const main = isWide ? vm.width - SIDEBAR - 3 : vm.width
 
   const counts: Record<LoopState, number> = { running: 0, waiting: 0, idle: 0, ended: 0 }
   for (const c of vm.sessions) counts[liveState(c)] += 1
@@ -95,147 +126,157 @@ export function drawBoard(el: Kit, vm: ViewModel, act: Actions) {
       if (s === 'waiting') loopsWaiting += 1
     }
   }
-  const shown = vm.sessions.filter(c => vm.filter === 'all' || liveState(c) === vm.filter)
 
-  const badge = (state: LoopState, label: string) => (
-    <Text color={COLOR[state]} inverse>
-      {` ${label} `}
+  // ── atoms ─────────────────────────────────────────────────────────────
+  const badge = (state: LoopState, label: string) =>
+    vm.isTerminal ? (
+      <Text color={P[state]} inverse>
+        {` ${label} `}
+      </Text>
+    ) : (
+      <Text color={P[state]} backgroundColor={`${HEX[state]}26`} bold>
+        {` ${label} `}
+      </Text>
+    )
+  const dot = (state: LoopState) => <Text color={P[state]}>● </Text>
+  const label = (text: string) => (
+    <Text color={P.dim} bold>
+      {text}
     </Text>
   )
-  const rule = (width: number) => <Text dimColor>{'─'.repeat(Math.max(0, width))}</Text>
-
-  // ── header ────────────────────────────────────────────────────────────
-  const tally = (
-    <Box gap={2} flexWrap="wrap">
-      {(['running', 'waiting', 'idle', 'ended'] as const).map(s => (
-        <Text key={`n-${s}`}>
-          <Text color={COLOR[s]}>{s === 'ended' ? '■' : '●'}</Text>
-          <Text color={s === 'running' || s === 'waiting' ? COLOR[s] : undefined} dimColor={counts[s] === 0}>
-            {` ${counts[s]} ${t.state[s] === t.state.waiting ? t.badge.waiting.toLowerCase() : t.state[s]}`}
-          </Text>
-        </Text>
-      ))}
-      <Text dimColor>{`⟳ ${t.autoRefresh} 3s`}</Text>
+  const rule = () => <Text color={P.line}>{'─'.repeat(Math.max(0, Math.min(vm.width, 400)))}</Text>
+  const openLink = (c: SessionCard, text: string) => {
+    const hostId = c.hostId
+    return hostId ? (
+      <Button plain key={`open-${c.sessionId}`} label={text} onPress={() => act.openSession(hostId)} />
+    ) : null
+  }
+  const card = (key: string, isAlert: boolean, children: RenderElement) => (
+    <Box
+      key={key}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={isAlert ? P.waiting : P.line}
+      backgroundColor={P.card}
+      paddingX={1}
+      marginBottom={1}
+    >
+      {children}
     </Box>
   )
+  const back = (to: Route) => <Button key="back" hotkey="b" label={t.back} onPress={() => act.go(to)} />
+
+  // ── header ────────────────────────────────────────────────────────────
   const header = (
     <Box key="header" flexDirection="column">
       <Box justifyContent="space-between" flexWrap="wrap" columnGap={2}>
         <Box flexDirection="column">
           <Text>
-            <Text color="claude">◉ </Text>
-            <Text bold>AGENT WATCH</Text>
+            <Text color={P.accent}>◉ </Text>
+            <Text bold color={P.text}>
+              AGENT WATCH
+            </Text>
           </Text>
-          <Text dimColor>{`  ${t.subtitle}`}</Text>
+          <Text color={P.dim}>{t.subtitle}</Text>
         </Box>
-        {tally}
+        <Box columnGap={2} flexWrap="wrap" alignItems="center">
+          {(['running', 'waiting', 'idle', 'ended'] as const).map(s => (
+            <Button
+              key={`count-${s}`}
+              plain
+              label={`${s === 'ended' ? '■' : '●'} ${counts[s]} ${t.filterName[s].toLowerCase()}`}
+              dimColor={counts[s] === 0}
+              onPress={() => act.setFilter(vm.filter === s ? 'all' : s)}
+            />
+          ))}
+          <Button key="refresh-top" plain label={`⟳ ${t.autoRefresh} 3s`} dimColor onPress={act.refresh} />
+        </Box>
       </Box>
-      {rule(vm.width)}
+      {rule()}
     </Box>
   )
 
-  // ── one agent ─────────────────────────────────────────────────────────
-  const agentRow = (a: AgentCard, width: number) => {
+  // ── one agent row (clickable) ─────────────────────────────────────────
+  const agentRow = (c: SessionCard, a: AgentCard) => {
     const state = agentState(a.status, a.waiting)
     const elapsed =
-      a.startedAt === undefined
-        ? ''
-        : clock((state === 'ended' ? (a.endedAt ?? now) : now) - a.startedAt)
+      a.startedAt === undefined ? '' : clock((state === 'ended' ? (a.endedAt ?? now) : now) - a.startedAt)
     const activity = state === 'ended' ? undefined : (a.waiting ?? a.tool)
-    const name = short(`${a.type} · ${a.label}`, Math.max(80, width))
     return (
-      <Box key={a.id} flexDirection="column">
-        <Box justifyContent="space-between">
-          <Text wrap="truncate-end">
-            <Text color={COLOR[state]}>● </Text>
-            {name}
-          </Text>
-          <Box gap={1}>
-            {badge(state, t.badge[state])}
-            <Text dimColor>{elapsed.padStart(7)}</Text>
+      <Box key={`a-${a.id}`} flexDirection="column">
+        <Box justifyContent="space-between" columnGap={1}>
+          <Box flexShrink={1}>
+            {dot(state)}
+            <Button
+              plain
+              key={`agent-${c.sessionId}-${a.id}`}
+              label={short(`${a.type} · ${a.label}`, 70)}
+              onPress={() => act.go({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
+            />
+          </Box>
+          <Box columnGap={1} flexShrink={0}>
+            {badge(state, t.filterName[state])}
+            <Text color={P.dim}>{elapsed.padStart(7)}</Text>
           </Box>
         </Box>
         {activity && (
-          <Text dimColor wrap="truncate-end">
-            {`  ▸ ${activity}`}
+          <Text color={P.faint} wrap="truncate-end">
+            {`    ▸ ${activity}`}
           </Text>
         )}
       </Box>
     )
   }
 
-  // ── one session ───────────────────────────────────────────────────────
-  const card = (c: SessionCard) => {
+  const statusBlock = (c: SessionCard) =>
+    c.state === 'waiting' ? (
+      <Box borderStyle="round" borderColor={P.waiting} backgroundColor={vm.isTerminal ? undefined : `${HEX.waiting}14`} paddingX={1} flexDirection="column">
+        <Text color={P.waiting} bold wrap="truncate-end">
+          {`⚠ ${t.inputRequired}`}
+        </Text>
+        <Text color={P.dim} wrap="truncate-end">
+          {c.waiting ? `${c.waiting} · ${t.waitingForYourResponse}` : t.waitingForYourResponse}
+        </Text>
+      </Box>
+    ) : c.state === 'running' ? (
+      <Text wrap="truncate-end">
+        <Text color={P.running}>▸ </Text>
+        <Text color={P.dim}>{c.tool ?? t.state.running}</Text>
+      </Text>
+    ) : c.state === 'idle' ? (
+      <Text color={P.faint} wrap="truncate-end">
+        {`○ ${t.waitingForNextMessage}`}
+      </Text>
+    ) : (
+      <Text color={P.faint} wrap="truncate-end">
+        {`× ${t.lastSeen(clock(now - c.updatedAt))}`}
+      </Text>
+    )
+
+  // ── list page ─────────────────────────────────────────────────────────
+  const sessionCard = (c: SessionCard) => {
     const state = liveState(c)
     const isMine = c.sessionId === vm.mine
     const isFolded = vm.collapsed.includes(c.sessionId)
     const when = c.state === 'ended' ? t.endedAgo(clock(now - c.updatedAt)) : t.since(clock(now - c.since))
-    const inner = main - 4
-    const isSplit = inner >= 84 && c.agents.length > 0 && !isFolded
-    const left = isSplit ? Math.floor(inner * 0.42) : inner
-    const right = inner - left - 2
-
-    const about = (
-      <Box flexDirection="column" width={isSplit ? left : undefined}>
-        {c.state === 'waiting' ? (
-          <Box borderStyle="round" borderColor="warning" paddingX={1} flexDirection="column">
-            <Text color="warning" bold wrap="truncate-end">
-              {`⚠ ${t.inputRequired}`}
-            </Text>
-            <Text dimColor wrap="truncate-end">
-              {c.waiting ? `${c.waiting} · ${t.waitingForYourResponse}` : t.waitingForYourResponse}
-            </Text>
-          </Box>
-        ) : c.state === 'running' ? (
-          <Text wrap="truncate-end">
-            <Text color="success">▸ </Text>
-            <Text dimColor>{c.tool ?? t.state.running}</Text>
-          </Text>
-        ) : c.state === 'idle' ? (
-          <Text dimColor wrap="truncate-end">
-            {`○ ${t.waitingForNextMessage}`}
-          </Text>
-        ) : (
-          <Text dimColor wrap="truncate-end">
-            {`× ${t.lastSeen(clock(now - c.updatedAt))}`}
-          </Text>
-        )}
-      </Box>
-    )
-
-    const agents =
-      c.agents.length === 0 || isFolded ? null : (
-        <Box
-          flexDirection="column"
-          borderStyle="round"
-          borderColor="inactive"
-          paddingX={1}
-          width={isSplit ? right : undefined}
-          marginTop={isSplit ? 0 : 1}
-        >
-          {c.agents.map(a => agentRow(a, (isSplit ? right : inner) - 4))}
-        </Box>
-      )
-
-    return (
-      <Box
-        key={`s-${c.sessionId}`}
-        flexDirection="column"
-        borderStyle="round"
-        borderColor={state === 'waiting' ? 'warning' : 'inactive'}
-        paddingX={1}
-        marginBottom={1}
-      >
+    return card(
+      `s-${c.sessionId}`,
+      state === 'waiting',
+      <Box flexDirection="column">
         <Box justifyContent="space-between" columnGap={2}>
-          <Text wrap="truncate-end">
-            <Text color={COLOR[state]}>● </Text>
-            <Text bold>{short(c.title || t.newSession, Math.max(12, inner - 46))}</Text>
-            {isMine ? <Text dimColor>{t.here}</Text> : ''}
-            {'  '}
+          <Box flexShrink={1} columnGap={1}>
+            {dot(state)}
+            <Button
+              plain
+              key={`session-${c.sessionId}`}
+              label={short(c.title || t.newSession, Math.max(16, main - 40))}
+              onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
+            />
+            {isMine ? <Text color={P.dim}>{t.here.trim()}</Text> : null}
             {badge(state, t.badge[state])}
-          </Text>
-          <Box gap={2}>
-            <Text dimColor>{when}</Text>
+          </Box>
+          <Box columnGap={2} flexShrink={0}>
+            <Text color={P.dim}>{when}</Text>
             {c.agents.length > 0 && (
               <Button
                 plain
@@ -247,91 +288,237 @@ export function drawBoard(el: Kit, vm: ViewModel, act: Actions) {
             )}
           </Box>
         </Box>
-        <Text dimColor wrap="truncate-start">
-          {`▢ ${prettyPath(c.cwd, vm.home)}`}
-        </Text>
-        <Box flexDirection={isSplit ? 'row' : 'column'} columnGap={2} marginTop={1}>
-          {about}
-          {agents}
+        <Box justifyContent="space-between" columnGap={2}>
+          <Text color={P.dim} wrap="truncate-start">
+            {`▢ ${prettyPath(c.cwd, vm.home)}`}
+          </Text>
+          {openLink(c, t.open)}
         </Box>
-      </Box>
+        <Box marginTop={1} flexDirection="column">
+          {statusBlock(c)}
+        </Box>
+        {c.agents.length > 0 && !isFolded && (
+          <Box
+            flexDirection="column"
+            marginTop={1}
+            borderStyle="round"
+            borderColor={P.line}
+            backgroundColor={P.panel}
+            paddingX={1}
+          >
+            {c.agents.map(a => agentRow(c, a))}
+          </Box>
+        )}
+      </Box>,
     )
   }
 
-  const list = (
+  const shown = vm.sessions.filter(c => vm.filter === 'all' || liveState(c) === vm.filter)
+  const listPage = (
     <Box key="list" flexDirection="column" width={main}>
       {vm.sessions.length === 0 ? (
-        <Text dimColor>{t.noSessions}</Text>
+        <Text color={P.dim}>{t.noSessions}</Text>
       ) : shown.length === 0 ? (
-        <Text dimColor>{t.noMatch}</Text>
+        <Text color={P.dim}>{t.noMatch}</Text>
       ) : (
-        shown.map(card)
+        <Box flexDirection="column">
+          <Text color={P.faint}>{t.hint}</Text>
+          {shown.map(sessionCard)}
+        </Box>
       )}
     </Box>
   )
 
-  // ── sidebar ───────────────────────────────────────────────────────────
-  const filterName = (f: Filter) => (f === 'all' ? t.allSessions : t.filterName[f])
-  const filterRow = (f: Filter, i: number) => {
-    const isOn = vm.filter === f
-    const n = f === 'all' ? vm.sessions.length : counts[f]
-    return (
-      <Box key={`f-${f}`} justifyContent="space-between">
-        <Box>
-          <Text color="claude">{isOn ? '▌' : ' '}</Text>
-          <Text color={f === 'all' ? 'claude' : COLOR[f]}>{f === 'all' ? '▣ ' : '● '}</Text>
-          <Button plain key={`filter-${f}`} hotkey={String(i + 1)} label={filterName(f)} dimColor={!isOn} onPress={() => act.setFilter(f)} />
-        </Box>
-        <Text dimColor={!isOn} bold={isOn}>
-          {String(n)}
+  // ── session page ──────────────────────────────────────────────────────
+  const field = (name: string, value: string | null, key: string) =>
+    value ? (
+      <Box key={key} columnGap={1}>
+        <Text color={P.dim}>{`${name.padEnd(12)}`}</Text>
+        <Text color={P.text} wrap="truncate-end">
+          {value}
         </Text>
+      </Box>
+    ) : null
+  const sessionPage = (c: SessionCard) => {
+    const state = liveState(c)
+    return (
+      <Box key="session" flexDirection="column" width={main}>
+        <Box justifyContent="space-between" marginBottom={1}>
+          {back({ view: 'list' })}
+          {openLink(c, t.openInApp)}
+        </Box>
+        {card(
+          'session-card',
+          state === 'waiting',
+          <Box flexDirection="column">
+            <Box columnGap={1}>
+              {dot(state)}
+              <Text bold color={P.text} wrap="truncate-end">
+                {c.title || t.newSession}
+              </Text>
+              {badge(state, t.badge[state])}
+            </Box>
+            <Box flexDirection="column" marginTop={1}>
+              {field(t.folder, prettyPath(c.cwd, vm.home), 'f-folder')}
+              {field(t.stateLabel, t.state[c.state], 'f-state')}
+              {field(t.duration, clock(now - c.since), 'f-since')}
+              {field(t.waitingReason, c.state === 'waiting' ? (c.waiting ?? null) : null, 'f-wait')}
+              {field(t.currentTool, c.state === 'running' ? (c.tool ?? null) : null, 'f-tool')}
+              {field(t.sessionId, c.sessionId, 'f-id')}
+            </Box>
+            <Box marginTop={1} flexDirection="column">
+              {statusBlock(c)}
+            </Box>
+          </Box>,
+        )}
+        {label(t.agentsTitle(c.agents.length))}
+        {c.agents.length === 0 ? (
+          <Text color={P.faint}>{t.noAgents}</Text>
+        ) : (
+          <Box flexDirection="column" borderStyle="round" borderColor={P.line} backgroundColor={P.panel} paddingX={1}>
+            {c.agents.map(a => agentRow(c, a))}
+          </Box>
+        )}
       </Box>
     )
   }
-  const setting = (key: string, icon: string, label: string, value: string, hotkey: string, onPress: () => void) => (
-    <Box key={key} justifyContent="space-between">
-      <Text>{`${icon} ${label}`}</Text>
-      <Button plain key={key} hotkey={hotkey} label={`${value} ›`} onPress={onPress} />
-    </Box>
-  )
-  const shortcut = (keys: string, label: string) => (
-    <Text key={`k-${keys}`}>
-      <Text inverse>{` ${keys} `}</Text>
-      <Text dimColor>{` ${label}`}</Text>
-    </Text>
-  )
+
+  // ── agent page ────────────────────────────────────────────────────────
+  const agentPage = (c: SessionCard, a: AgentCard) => {
+    const state = agentState(a.status, a.waiting)
+    const d = vm.detail && vm.detail.agentId === a.id ? vm.detail : null
+    const elapsed =
+      a.startedAt === undefined ? null : clock((state === 'ended' ? (a.endedAt ?? now) : now) - a.startedAt)
+    return (
+      <Box key="agent" flexDirection="column" width={main}>
+        <Box justifyContent="space-between" marginBottom={1}>
+          {back({ view: 'session', sessionId: c.sessionId })}
+          {openLink(c, t.openInApp)}
+        </Box>
+        {card(
+          'agent-card',
+          state === 'waiting',
+          <Box flexDirection="column">
+            <Box columnGap={1}>
+              {dot(state)}
+              <Text bold color={P.text} wrap="truncate-end">
+                {`${a.type} · ${a.label}`}
+              </Text>
+              {badge(state, t.badge[state])}
+            </Box>
+            <Box flexDirection="column" marginTop={1}>
+              {field(t.sessionId, c.title || c.sessionId, 'g-session')}
+              {field(t.duration, elapsed, 'g-elapsed')}
+              {field(t.currentTool, state === 'ended' ? null : (a.waiting ?? a.tool ?? null), 'g-tool')}
+            </Box>
+          </Box>,
+        )}
+        {!d || d.isLoading ? (
+          <Text color={P.dim}>{t.loading}</Text>
+        ) : d.error ? (
+          <Text color={P.ended}>{t.unreadable}</Text>
+        ) : (
+          <Box flexDirection="column">
+            {d.prompt ? (
+              <Box flexDirection="column" marginBottom={1}>
+                {label(t.task)}
+                <Text color={P.text}>{d.prompt}</Text>
+              </Box>
+            ) : null}
+            {label(t.lastTools)}
+            <Box flexDirection="column" borderStyle="round" borderColor={P.line} backgroundColor={P.panel} paddingX={1} marginBottom={1}>
+              {d.tools.length === 0 ? (
+                <Text color={P.faint}>{t.nothingYet}</Text>
+              ) : (
+                d.tools.map((tool, i) => (
+                  <Text key={`tool-${i}`} wrap="truncate-end">
+                    <Text color={P.running}>▸ </Text>
+                    <Text color={P.text} bold>
+                      {tool.name}
+                    </Text>
+                    <Text color={P.dim}>{tool.detail ? `  ${tool.detail}` : ''}</Text>
+                  </Text>
+                ))
+              )}
+            </Box>
+            {label(t.lastAnswer)}
+            <Text color={d.answer ? P.text : P.faint}>{d.answer ?? t.nothingYet}</Text>
+          </Box>
+        )}
+      </Box>
+    )
+  }
+
+  // ── which page ────────────────────────────────────────────────────────
+  const route = vm.route
+  const routed = route.view === 'list' ? undefined : vm.sessions.find(c => c.sessionId === route.sessionId)
+  const routedAgent =
+    route.view === 'agent' && routed ? routed.agents.find(a => a.id === route.agentId) : undefined
+  const page =
+    route.view === 'agent' && routed && routedAgent
+      ? agentPage(routed, routedAgent)
+      : route.view !== 'list' && routed
+        ? sessionPage(routed)
+        : listPage
+
+  // ── sidebar ───────────────────────────────────────────────────────────
+  const filterName = (f: Filter) => (f === 'all' ? t.allSessions : t.filterName[f])
   const sidebar = (
-    <Box key="side" flexDirection="column" width={SIDEBAR} gap={1}>
+    <Box key="side" flexDirection="column" width={SIDEBAR} rowGap={1}>
       <Box flexDirection="column">
-        <Text dimColor bold>
-          {t.filters}
-        </Text>
-        {FILTERS.map(filterRow)}
+        {label(t.filters)}
+        {FILTERS.map((f, i) => {
+          const isOn = vm.filter === f && route.view === 'list'
+          return (
+            <Box key={`f-${f}`} justifyContent="space-between">
+              <Box>
+                <Text color={P.accent}>{isOn ? '▌' : ' '}</Text>
+                <Text color={f === 'all' ? P.accent : P[f]}>{f === 'all' ? '▣ ' : '● '}</Text>
+                <Button
+                  plain
+                  key={`filter-${f}`}
+                  hotkey={String(i + 1)}
+                  label={filterName(f)}
+                  dimColor={!isOn}
+                  onPress={() => act.setFilter(f)}
+                />
+              </Box>
+              <Text color={isOn ? P.text : P.dim} bold={isOn}>
+                {String(f === 'all' ? vm.sessions.length : counts[f])}
+              </Text>
+            </Box>
+          )
+        })}
       </Box>
       <Box flexDirection="column">
-        <Text dimColor bold>
-          {t.settings}
-        </Text>
-        {setting('set-language', '◍', t.language, t.languageName, 'l', act.toggleLanguage)}
-        {setting('set-notify', '◔', t.notifications, vm.notify ? t.on : t.off, 'n', act.toggleNotify)}
-        {setting('set-status', '≡', t.statusLine, vm.statusLine ? t.on : t.off, 's', act.toggleStatusLine)}
+        {label(t.settings)}
+        {(
+          [
+            ['set-language', '◍', t.language, t.languageName, 'l', act.toggleLanguage],
+            ['set-notify', '◔', t.notifications, vm.notify ? t.on : t.off, 'n', act.toggleNotify],
+            ['set-status', '≡', t.statusLine, vm.statusLine ? t.on : t.off, 's', act.toggleStatusLine],
+          ] as const
+        ).map(([key, icon, name, value, hotkey, onPress]) => (
+          <Box key={key} justifyContent="space-between">
+            <Text color={P.text}>{`${icon} ${name}`}</Text>
+            <Button plain key={key} hotkey={hotkey} label={`${value} ›`} onPress={onPress} />
+          </Box>
+        ))}
       </Box>
       <Box flexDirection="column">
-        <Text dimColor bold>
-          {t.shortcuts}
-        </Text>
+        {label(t.shortcuts)}
         <Button plain key="refresh" hotkey="r" label={t.refresh} onPress={act.refresh} />
-        {shortcut('1-5', t.filterKeys)}
-        {shortcut('ctrl+x tab', t.focusKeys)}
-        {shortcut('esc', t.closeKeys)}
+        <Text color={P.dim}>{`1-5  ${t.filterKeys}`}</Text>
+        <Text color={P.dim}>{`b    ${t.back.replace('← ', '')}`}</Text>
+        <Text color={P.dim}>{`esc  ${t.closeKeys}`}</Text>
       </Box>
-      <Box flexDirection="column" borderStyle="round" borderColor="inactive" paddingX={1}>
-        <Text bold>ⓘ Agent Watch</Text>
-        <Text dimColor>{`v${vm.version}`}</Text>
-        <Text dimColor>{t.openSource}</Text>
-        <Text color="claude" wrap="truncate-end">
-          github.com/TheoGegout/claude-agent-watch
+      <Box flexDirection="column" borderStyle="round" borderColor={P.line} backgroundColor={P.card} paddingX={1}>
+        <Text bold color={P.text}>
+          ⓘ Agent Watch
         </Text>
+        <Text color={P.dim}>{`v${vm.version}`}</Text>
+        <Text color={P.dim}>{t.openSource}</Text>
+        <Link href="https://github.com/TheoGegout/claude-agent-watch" label="github.com/TheoGegout/claude-agent-watch" />
       </Box>
     </Box>
   )
@@ -341,7 +528,7 @@ export function drawBoard(el: Kit, vm: ViewModel, act: Actions) {
     <Box key="filters" flexWrap="wrap" columnGap={2} marginBottom={1}>
       {FILTERS.map((f, i) => (
         <Box key={`fb-${f}`}>
-          <Text color={f === 'all' ? 'claude' : COLOR[f]}>{vm.filter === f ? '▌' : ' '}</Text>
+          <Text color={f === 'all' ? P.accent : P[f]}>{vm.filter === f ? '▌' : ' '}</Text>
           <Button
             plain
             key={`filter-${f}`}
@@ -353,41 +540,42 @@ export function drawBoard(el: Kit, vm: ViewModel, act: Actions) {
         </Box>
       ))}
       <Button plain key="refresh" hotkey="r" label={`⟳ ${t.refresh}`} dimColor onPress={act.refresh} />
+      <Button plain key="set-language" hotkey="l" label={t.languageName} dimColor onPress={act.toggleLanguage} />
     </Box>
   )
 
   // ── footer ────────────────────────────────────────────────────────────
   const footer = (
     <Box key="footer" flexDirection="column">
-      {rule(vm.width)}
+      {rule()}
       <Box justifyContent="space-between" flexWrap="wrap" columnGap={2}>
-        <Text dimColor>
-          <Text color="success">● </Text>
+        <Text color={P.dim}>
+          <Text color={P.running}>● </Text>
           {`${t.footerRefresh}  │  ◔ ${t.footerNotifications(vm.notify)}`}
         </Text>
         <Text>
-          <Text color="success">{`● ${loopsRunning} `}</Text>
-          <Text dimColor>{t.state.running}</Text>
-          <Text dimColor>{'  ·  '}</Text>
-          <Text color="warning">{`${loopsWaiting} `}</Text>
-          <Text dimColor>{t.badge.waiting.toLowerCase()}</Text>
+          <Text color={P.running}>{`● ${loopsRunning} `}</Text>
+          <Text color={P.dim}>{t.filterName.running.toLowerCase()}</Text>
+          <Text color={P.dim}>{'  ·  '}</Text>
+          <Text color={P.waiting}>{`${loopsWaiting} `}</Text>
+          <Text color={P.dim}>{t.filterName.waiting.toLowerCase()}</Text>
         </Text>
       </Box>
     </Box>
   )
 
   return (
-    <Box flexDirection="column" width={vm.width}>
+    <Box flexDirection="column" width={vm.width} backgroundColor={vm.isTerminal ? undefined : '#0e1117'} paddingX={vm.isTerminal ? 0 : 1}>
       {header}
       {isWide ? (
-        <Box key="body" columnGap={2}>
-          {list}
+        <Box key="body" columnGap={3} marginTop={1}>
+          {page}
           {sidebar}
         </Box>
       ) : (
-        <Box key="body" flexDirection="column">
-          {filterBar}
-          {list}
+        <Box key="body" flexDirection="column" marginTop={1}>
+          {route.view === 'list' ? filterBar : null}
+          {page}
         </Box>
       )}
       {footer}

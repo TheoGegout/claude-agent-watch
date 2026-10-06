@@ -16,7 +16,8 @@ function world(on: On, now: () => number) {
   const files = new Map<string, { text: string; mtimeMs: number }>()
   const toasts: string[] = []
   const status: (string | undefined)[] = []
-  mock.env(on, { USERPROFILE: HOME })
+  const opened: string[] = []
+  mock.env(on, { USERPROFILE: HOME, OS: 'Windows_NT' })
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.id', () => ({ value: ME }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }) as never)
@@ -46,6 +47,15 @@ function world(on: On, now: () => number) {
         })),
     }
   })
+  on('fs.stat', (_$, e) => {
+    const file = files.get(slash(e.path))
+    if (!file) throw new Error(`ENOENT ${e.path}`)
+    return { value: { kind: 'file' as const, size: file.text.length, mtimeMs: file.mtimeMs, isLink: false } }
+  })
+  on('process.run', (_$, e) => {
+    opened.push(e.argv.join(' '))
+    return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
   on('ui.toast', (_$, e) => {
     toasts.push(e.text)
     return { value: undefined }
@@ -60,7 +70,7 @@ function world(on: On, now: () => number) {
   const put = (path: string, value: unknown, mtimeMs = now()) =>
     files.set(path, { text: typeof value === 'string' ? value : JSON.stringify(value), mtimeMs })
   const own = () => JSON.parse(files.get(`${FOLDER}/${ME}.json`)?.text ?? '{}')
-  return { files, toasts, status, put, own }
+  return { files, toasts, status, opened, put, own }
 }
 
 const PANE = {
@@ -92,6 +102,7 @@ test('sessions without the mod show from the registry, with their subagents', as
     status: 'busy',
     waitingFor: 'permission Bash',
     statusUpdatedAt: NOW - 60_000,
+    hostSessionId: 'local_abc-123',
   })
   const subs = `${HOME}/.claude/projects/D--Dev-webshop/other/subagents`
   // One writing right now, one on a long tool call, one done, one long gone.
@@ -99,6 +110,7 @@ test('sessions without the mod show from the registry, with their subagents', as
   w.put(`${subs}/agent-live.meta.json`, { agentType: 'general-purpose', description: 'Run the e2e suite' })
   w.put(
     `${subs}/agent-long.jsonl`,
+    `${JSON.stringify({ type: 'user', message: { content: 'Bundle the app for release' } })}\n` +
     assistant({
       stop_reason: 'tool_use',
       content: [{ type: 'tool_use', name: 'Bash', input: { description: 'build the app' } }],
@@ -143,17 +155,23 @@ test('sessions without the mod show from the registry, with their subagents', as
     expect(await ui.find({ text: /agent · old/ })).toBeUndefined()
     await ui.unmount()
   }
-  // The desktop draws the dashboard as one SVG, its controls as buttons.
-  {
-    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-    const svg = String((await ui.find({ type: 'Svg' }))?.props.source)
-    for (const text of ['AGENT WATCH', 'Checkout flow', 'Permission / input required', 'Run the e2e suite', 'Bash · build the app', 'FILTERS']) {
-      expect(svg).toContain(text)
-    }
-    expect(await ui.find({ key: 'filter-waiting' })).toBeDefined()
-    await ui.press({ key: 'filter-waiting' })
-    expect(String((await ui.find({ type: 'Svg' }))?.props.source)).not.toContain('Release notes')
-    await ui.press({ key: 'filter-all' })
+  // Clicking through: a session, then one of its agents, then back.
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect(await ui.find({ key: 'open-other' })).toBeDefined()
+    await ui.press({ key: 'open-other' })
+    expect(w.opened.at(-1)).toContain('claude://code/continue?session=local_abc-123')
+    await ui.press({ key: 'session-other' })
+    expect(await ui.find({ text: /SUBAGENTS · 3/ })).toBeDefined()
+    expect(await ui.find({ text: /Open in the app/ })).toBeDefined()
+    await ui.press({ key: 'agent-other-long' })
+    expect(await ui.find({ text: /LAST TOOL CALLS/ })).toBeDefined()
+    expect(await ui.find({ text: /Bundle the app for release/ })).toBeDefined()
+    expect(await ui.find({ text: /build the app/ })).toBeDefined()
+    await ui.press({ key: 'back' })
+    expect(await ui.find({ text: /SUBAGENTS · 3/ })).toBeDefined()
+    await ui.press({ key: 'back' })
+    expect(await ui.find({ text: /Release notes/ })).toBeDefined()
     await ui.unmount()
   }
 
@@ -211,10 +229,9 @@ test('speaks French when asked', { options: { language: 'fr' } }, async ($, on) 
   expect(w.toasts.some(t => t.includes('attend ta réponse'))).toBe(true)
   expect(w.status.at(-1)).toBe('agents ▶ 1 en cours · ◆ 1 en attente')
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const svg = String((await ui.find({ type: 'Svg' }))?.props.source)
-  expect(svg).toContain('attend ta réponse')
-  expect(svg).toContain('dialog open')
-  expect(svg).toContain('FILTRES')
+  expect(await ui.find({ text: /attend ta réponse/ })).toBeDefined()
+  expect(await ui.find({ text: /dialog open/ })).toBeDefined()
+  expect(await ui.find({ text: /FILTRES/ })).toBeDefined()
 })
 
 test('the notification and the status line can be turned off', { options: { notifyWaiting: false, statusLine: false } }, async ($, on) => {

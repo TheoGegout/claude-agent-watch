@@ -94,6 +94,8 @@ Focus the pane with `ctrl+x tab` (or click it), then:
 
 | Key | Does |
 | --- | --- |
+| click a session / an agent | open its page |
+| `b` | back |
 | `1` … `5` | filter: all, running, waiting, idle, ended |
 | `r` | refresh now |
 | `l` | switch language (English / French) |
@@ -113,7 +115,9 @@ The mod only needs to be installed; the other sessions do not need it.
 | `~/.claude/projects/<project>/<session>/subagents/` | each subagent's type and task (`*.meta.json`) and, from the end of its transcript, whether it is running or done |
 | `~/.claude/agent-watch/*.json` | what sessions that load the mod report: the tool in use, the exact waiting reason |
 
-Each session that loads the mod writes one small file to `~/.claude/agent-watch/<session-id>.json`: its state, its current tool (a name plus a short path or description) and its subagents' names. Nothing else is written, nothing leaves your machine, and it makes no network requests, runs no processes and calls no model. `claude plugin validate .` prints exactly what it hooks and calls.
+Each session that loads the mod writes one small file to `~/.claude/agent-watch/<session-id>.json`: its state, its current tool (a name plus a short path or description) and its subagents' names. Nothing else is written, nothing leaves your machine, and it makes no network requests and calls no model.
+
+It runs a process in two cases only, both when you click: **Open ↗** hands the app's `claude://code/continue?session=…` link to the system (`rundll32 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` on Linux), and a subagent's page reads the first and last lines of a transcript over 4 MiB with PowerShell's `Get-Content`. `claude plugin validate .` prints exactly what it hooks and calls.
 
 **What is inferred, not measured.** The session registry and the subagent transcripts are Claude Code internals, not a public API: a Claude Code update can change them, and the pane would then show less until the mod is updated. A subagent counts as running while it writes to its transcript, and is classified from its transcript's last entries once quiet for 30 seconds; a transcript over 4 MiB cannot be read by a mod, so it is judged by when it was last written.
 
