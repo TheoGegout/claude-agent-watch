@@ -4,6 +4,8 @@
 
 A dashboard in place of the plain list.
 
+- On the desktop app, VS Code and mobile the dashboard is drawn as one SVG with its own dark palette and monospace type, sized to the pane; filters and settings are native buttons above it. The terminal keeps a text layout.
+
 - Header with the count of sessions running, waiting, idle and ended.
 - One card per session: status badge, folder, how long it has been so, a callout when it waits for you, and its subagents beside it with their badge, elapsed time and current activity. Cards fold (`▴`).
 - Sidebar from 104 columns: filters (`1`–`5`), settings that change `/config` in place (`l` language, `n` notifications, `s` status line), shortcuts (`r` refresh) and version. Narrower panes get the filters as one row.
