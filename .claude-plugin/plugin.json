@@ -1,0 +1,44 @@
+{
+  "name": "agent-watch",
+  "version": "0.1.0",
+  "description": "Agent Watch: one pane for every Claude Code session on your machine and its subagents, running, waiting for you, or idle",
+  "author": {
+    "name": "Théo Gégout",
+    "url": "https://github.com/TheoGegout"
+  },
+  "homepage": "https://github.com/TheoGegout/claude-agent-watch",
+  "repository": "https://github.com/TheoGegout/claude-agent-watch",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "claude-code-mod",
+    "claude-code-plugin",
+    "subagents",
+    "agents",
+    "sessions",
+    "dashboard",
+    "observability"
+  ],
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "language": {
+      "title": "Language",
+      "description": "Language of the pane, status line and notifications",
+      "type": "string",
+      "options": ["en", "fr"],
+      "default": "en"
+    },
+    "notifyWaiting": {
+      "title": "Notify when a session waits",
+      "description": "Show a notification when another session starts waiting for your answer",
+      "type": "boolean",
+      "default": true
+    },
+    "statusLine": {
+      "title": "Status line",
+      "description": "Show how many agents are running or waiting in the status line",
+      "type": "boolean",
+      "default": true
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "claude-agent-watch",
+  "metadata": {
+    "description": "Agent Watch: see every Claude Code session and subagent on your machine, running, waiting for you, or idle."
+  },
+  "owner": {
+    "name": "Théo Gégout",
+    "url": "https://github.com/TheoGegout"
+  },
+  "plugins": [
+    {
+      "name": "agent-watch",
+      "source": "./",
+      "description": "A live pane of every session and subagent on your machine: running, waiting for your answer, or idle."
+    }
+  ]
+}
