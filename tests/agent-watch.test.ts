@@ -127,8 +127,8 @@ test('sessions without the mod show from the registry, with their subagents', as
   await $.turn.complete({ reason: 'answer', answer: 'done', durationMs: 1000, turnId: 't1', isAborted: false })
   expect(w.own().state).toBe('idle')
 
-  for (const surface of ['terminal', 'desktop'] as const) {
-    const ui = await $.ui.mount({ ...PANE, surface })
+  {
+    const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect(await ui.find({ text: /Checkout flow/ })).toBeDefined()
     expect(await ui.find({ text: /D:\/Dev\/webshop/ })).toBeDefined()
     expect(await ui.find({ text: /Permission \/ input required/ })).toBeDefined()
@@ -143,6 +143,20 @@ test('sessions without the mod show from the registry, with their subagents', as
     expect(await ui.find({ text: /agent · old/ })).toBeUndefined()
     await ui.unmount()
   }
+  // The desktop draws the dashboard as one SVG, its controls as buttons.
+  {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    const svg = String((await ui.find({ type: 'Svg' }))?.props.source)
+    for (const text of ['AGENT WATCH', 'Checkout flow', 'Permission / input required', 'Run the e2e suite', 'Bash · build the app', 'FILTERS']) {
+      expect(svg).toContain(text)
+    }
+    expect(await ui.find({ key: 'filter-waiting' })).toBeDefined()
+    await ui.press({ key: 'filter-waiting' })
+    expect(String((await ui.find({ type: 'Svg' }))?.props.source)).not.toContain('Release notes')
+    await ui.press({ key: 'filter-all' })
+    await ui.unmount()
+  }
+
   // The filters: only the waiting session is left once pressed.
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'filter-waiting' })
@@ -197,8 +211,10 @@ test('speaks French when asked', { options: { language: 'fr' } }, async ($, on) 
   expect(w.toasts.some(t => t.includes('attend ta réponse'))).toBe(true)
   expect(w.status.at(-1)).toBe('agents ▶ 1 en cours · ◆ 1 en attente')
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ text: /attend ta réponse/ })).toBeDefined()
-  expect(await ui.find({ text: /dialog open/ })).toBeDefined()
+  const svg = String((await ui.find({ type: 'Svg' }))?.props.source)
+  expect(svg).toContain('attend ta réponse')
+  expect(svg).toContain('dialog open')
+  expect(svg).toContain('FILTRES')
 })
 
 test('the notification and the status line can be turned off', { options: { notifyWaiting: false, statusLine: false } }, async ($, on) => {

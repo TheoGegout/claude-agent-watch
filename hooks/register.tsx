@@ -5,11 +5,14 @@ import type { AgentCard, Board, Filter, LoopState, SelfStatus, SessionCard } fro
 import { STRINGS } from './strings'
 import type { Strings } from './strings'
 import { agentState, clock, drawBoard, liveState } from './view'
-import type { Kit } from './view'
+import type { Actions, Kit, ViewModel } from './view'
+import { renderSvg } from './svg'
 
 const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
 const VERSION = '0.2.0'
+// A pane column in CSS pixels on the surfaces that draw SVG.
+const PX_PER_COLUMN = 7.2
 const TICK_MS = 3000
 // A session that has not written for this long is closed (or its app is).
 const STALE_MS = 20_000
@@ -413,33 +416,63 @@ export const register: Register = (on, options) => {
     const setOption = (key: string, value: string | boolean) =>
       void $.config.set({ key: `agent-watch.${key}`, value }).catch(() => {})
 
-    return drawBoard(
-      $.ui.resolve(e) as unknown as Kit,
-      {
-        now,
-        sessions,
-        filter: await read($, filter),
-        collapsed: await read($, collapsed),
-        mine: sessionId,
-        home,
-        width,
-        t,
-        version: VERSION,
-        notify: notifyWaiting,
-        statusLine: showStatusLine,
+    const vm: ViewModel = {
+      now,
+      sessions,
+      filter: await read($, filter),
+      collapsed: await read($, collapsed),
+      mine: sessionId,
+      home,
+      width,
+      t,
+      version: VERSION,
+      notify: notifyWaiting,
+      statusLine: showStatusLine,
+    }
+    const act: Actions = {
+      setFilter: (f: Filter) => void update($, filter, () => f),
+      toggle: (id: string) =>
+        void update($, collapsed, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id])),
+      refresh: () => void tick($),
+      toggleLanguage: () => setOption('language', language === 'fr' ? 'en' : 'fr'),
+      toggleNotify: () => setOption('notifyWaiting', !notifyWaiting),
+      toggleStatusLine: () => {
+        if (showStatusLine) $.ui.status(undefined)
+        setOption('statusLine', !showStatusLine)
       },
-      {
-        setFilter: (f: Filter) => void update($, filter, () => f),
-        toggle: (id: string) =>
-          void update($, collapsed, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id])),
-        refresh: () => void tick($),
-        toggleLanguage: () => setOption('language', language === 'fr' ? 'en' : 'fr'),
-        toggleNotify: () => setOption('notifyWaiting', !notifyWaiting),
-        toggleStatusLine: () => {
-          if (showStatusLine) $.ui.status(undefined)
-          setOption('statusLine', !showStatusLine)
-        },
-      },
+    }
+
+    if (e.surface === 'terminal') {
+      return drawBoard($.ui.resolve(e) as unknown as Kit, vm, act)
+    }
+
+    // Surfaces that draw SVG get the dashboard as one picture, its controls as
+    // native buttons above it (an SVG takes no presses).
+    const { Box, Button, Svg } = $.ui.resolve(e)
+    const picture = renderSvg(vm, width * PX_PER_COLUMN)
+    return (
+      <Box flexDirection="column" width="100%">
+        <Box flexWrap="wrap" columnGap={1} rowGap={0}>
+          {(['all', 'running', 'waiting', 'idle', 'ended'] as const).map((f, i) => (
+            <Button
+              key={`filter-${f}`}
+              hotkey={String(i + 1)}
+              variant={vm.filter === f ? 'primary' : 'secondary'}
+              label={f === 'all' ? t.allSessions : t.filterName[f]}
+              onPress={() => act.setFilter(f)}
+            />
+          ))}
+          <Button key="refresh" hotkey="r" label={`⟳ ${t.refresh}`} onPress={act.refresh} />
+          <Button key="set-language" hotkey="l" label={t.languageName} onPress={act.toggleLanguage} />
+          <Button
+            key="set-notify"
+            hotkey="n"
+            label={`${t.notifications}: ${notifyWaiting ? t.on : t.off}`}
+            onPress={act.toggleNotify}
+          />
+        </Box>
+        <Svg source={picture.source} alt={picture.alt} />
+      </Box>
     )
   })
 }
