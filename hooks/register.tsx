@@ -12,7 +12,7 @@ const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
 const VERSION = '0.2.0'
 // A pane column in CSS pixels on the surfaces that draw SVG.
-const PX_PER_COLUMN = 7.2
+const PX_PER_COLUMN = 8.3
 const TICK_MS = 3000
 // A session that has not written for this long is closed (or its app is).
 const STALE_MS = 20_000
