@@ -30,6 +30,8 @@ export type Actions = {
   setFilter: (filter: Filter) => void
   toggle: (sessionId: string) => void
   go: (route: Route) => void
+  /** The session the wide pane shows without one being picked, so its page loads. */
+  showing: (sessionId: string | undefined) => void
   openSession: (hostId: string) => void
   refresh: () => void
   toggleLanguage: () => void
@@ -509,6 +511,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         ? (ordered.find(c => c.sessionId !== vm.mine) ?? ordered[0])?.sessionId
         : undefined
   const selectedAt = ordered.findIndex(c => c.sessionId === selectedId)
+  act.showing(route.view === 'list' ? selectedId : undefined)
   const step = (by: number) => {
     const next = ordered[Math.min(ordered.length - 1, Math.max(0, (selectedAt < 0 ? -1 : selectedAt) + by))]
     if (next) act.go({ view: 'session', sessionId: next.sessionId })
@@ -706,7 +709,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         </Box>
       ) : (
         <Box key="body" flexDirection="column" marginTop={1}>
-          {route.view === 'list' ? list : detail}
+          {route.view === 'list' || !routed ? list : detail}
         </Box>
       )}
       {footer}

@@ -52,6 +52,8 @@ export type SessionCard = {
   startedAt?: number
   updatedAt: number
   agents: AgentCard[]
+  /** Whether the session that wrote this report sends system notifications. */
+  notify?: boolean
 }
 
 /** A subagent's transcript, read when its page opens. */

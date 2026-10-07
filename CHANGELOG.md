@@ -12,6 +12,19 @@ The pane as a session list, [herdr](https://github.com/herdrdev/herdr)'s way.
 - Projects numbered `1`–`9` (the key jumps to it), each with its git branch; one-word states (`blocked`, `working`, `done`, `idle`) and a spinner while a session or subagent works; an `agents` section gathers every subagent at work across sessions.
 - The selected session reads like its own terminal: `❯` your message, `⏺ Tool(detail)` its calls (the live one spinning), Claude's answer, `Working…` with its time while it runs, a permission box while it waits, and a status line with folder, branch, model and context size.
 
+### Fixed (0.3.0)
+
+- A `/clear` or a resume no longer leaves a ghost card running forever: the mod follows the session's new id.
+- Generated tokens count each response's final figure, not its first row's.
+- The session the wide pane shows by itself loads its conversation and counts as seen.
+- A slow read of an earlier pick no longer overwrites the later one; a failed read is tried again.
+- One pass of the board at a time; the turn, a permission dialog and a question no longer wait for it.
+- No burst of notifications at start for sessions already waiting; every new wait gets one system notification, from one session, even when the sender itself waits.
+- Git worktrees and submodules show their own branch; a session listed twice in the registry shows once; a malformed file is skipped instead of freezing the board.
+- A subagent stopped mid-call, its session idle, reads as ended; finished subagents leave the board after 10 minutes in every session.
+- The agent page refreshes while the agent works; a narrow pane whose session left goes back to the list.
+- Clicks no longer need two tries: the pane redraws only when something changed.
+
 ## 0.2.0 — 2026-10-07
 
 A clickable panel in place of the plain list.

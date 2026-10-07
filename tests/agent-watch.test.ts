@@ -73,6 +73,10 @@ function world(on: On, now: () => number) {
   return { files, toasts, status, opened, put, own }
 }
 
+// Runs one pass of the board and waits for it, as `/agent-watch text` does.
+const pass = ($: { command: { run: (e: never) => Promise<unknown> } }) =>
+  $.command.run({ command: 'agent-watch', args: 'text', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as never)
+
 const PANE = {
   plugin: 'agent-watch',
   component: 'Pane',
@@ -94,16 +98,16 @@ test('sessions without the mod show from the registry, with their subagents', as
   const w = world(on, clock.now)
 
   w.put(`${REGISTRY}/7344.json`, { sessionId: ME, cwd: 'D:\\', name: 'Release notes', status: 'busy' })
-  // Another session, no mod, a permission dialog open.
-  w.put(`${REGISTRY}/24292.json`, {
+  // Another session, no mod, busy; it opens a permission dialog once the mod is watching.
+  const other = {
     sessionId: 'other',
     cwd: 'D:\\Dev\\webshop',
     name: 'Checkout flow',
     status: 'busy',
-    waitingFor: 'permission Bash',
     statusUpdatedAt: NOW - 60_000,
     hostSessionId: 'local_abc-123',
-  })
+  }
+  w.put(`${REGISTRY}/24292.json`, other)
   const subs = `${HOME}/.claude/projects/D--Dev-webshop/other/subagents`
   // One writing right now, one on a long tool call, one done, one long gone.
   w.put(`${subs}/agent-live.jsonl`, '{"type":"user"}\n')
@@ -139,6 +143,9 @@ test('sessions without the mod show from the registry, with their subagents', as
 
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   expect(w.own().state).toBe('idle')
+  expect(w.toasts.some(t => t.includes('is waiting for you'))).toBe(false)
+  w.put(`${REGISTRY}/24292.json`, { ...other, waitingFor: 'permission Bash' })
+  await pass($)
   expect(w.toasts.some(t => t.includes('Checkout flow') && t.includes('is waiting for you'))).toBe(true)
   // The system's own notification, once, which opens that session when clicked.
   const notes = w.opened.filter(line => line.includes('notify.ps1'))
@@ -147,12 +154,15 @@ test('sessions without the mod show from the registry, with their subagents', as
   expect(notes[0]).toContain('Checkout flow')
 
   await $.turn.start({ text: 'write the release notes', turnId: 't1' })
+  await pass($)
   expect(w.own().state).toBe('running')
 
   await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: {} })
+  await pass($)
   expect(w.own().waiting).toBe('permission Bash')
 
   await $.turn.complete({ reason: 'answer', answer: 'done', durationMs: 1000, turnId: 't1', isAborted: false })
+  await pass($)
   expect(w.own().state).toBe('idle')
 
   {
@@ -246,15 +256,12 @@ test('a session that reported but left the registry shows as ended', async ($, o
 test('speaks French when asked', { options: { language: 'fr' } }, async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on, clock.now)
-  w.put(`${REGISTRY}/1.json`, {
-    sessionId: 'other',
-    cwd: 'D:\\Dev\\webshop',
-    name: 'Checkout flow',
-    status: 'busy',
-    waitingFor: 'dialog open',
-  })
+  const other = { sessionId: 'other', cwd: 'D:\\Dev\\webshop', name: 'Checkout flow', status: 'busy' }
+  w.put(`${REGISTRY}/1.json`, other)
 
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  w.put(`${REGISTRY}/1.json`, { ...other, waitingFor: 'dialog open' })
+  await pass($)
   expect(w.toasts.some(t => t.includes('attend ta réponse'))).toBe(true)
   expect(w.status.at(-1)).toBe('agents ▶ 1 en cours · ◆ 1 en attente')
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -340,7 +347,8 @@ test('a session that finished since you last looked reads as done, until you ope
   w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:\\Dev\\webshop', name: 'Checkout flow', status: 'busy', statusUpdatedAt: NOW - 5_000 })
 
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
-  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  // Narrow: nothing is on screen until picked, so nothing counts as looked at.
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...(PANE.props as object), bodyColumns: 60 } as never })
   expect(await ui.find({ text: /^● $/ })).toBeDefined()
 
   // It finishes while you look elsewhere.
@@ -405,4 +413,37 @@ test('n turns notifications off and on, says so, and keeps the choice', async ($
   // A session that starts later reads the choice back.
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   expect(await ui.find({ text: /🔕 Notifications OFF/ })).toBeDefined()
+})
+
+test('no burst at start: sessions already waiting are not news; one sender per wait', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, clock.now)
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'a', cwd: 'D:/', name: 'Long wait', status: 'busy', waitingFor: 'dialog open' })
+  const b = { sessionId: 'b', cwd: 'D:/', name: 'Fresh', status: 'busy', hostSessionId: 'local_b-1' }
+  w.put(`${REGISTRY}/2.json`, b)
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  expect(w.toasts).toEqual([])
+  expect(w.opened.filter(line => line.includes('notify.ps1'))).toEqual([])
+
+  w.put(`${REGISTRY}/2.json`, { ...b, waitingFor: 'permission Edit' })
+  await pass($)
+  await pass($)
+  expect(w.toasts.filter(t => t.includes('Fresh')).length).toBe(1)
+  const notes = w.opened.filter(line => line.includes('notify.ps1'))
+  expect(notes.length).toBe(1)
+  expect(notes[0]).toContain('session=local_b-1')
+})
+
+test('a subagent stopped mid-call, its session idle and silent for minutes, reads as ended', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, clock.now)
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:/x', name: 'Quiet', status: 'idle' })
+  const subs = `${HOME}/.claude/projects/D--x/other/subagents`
+  w.put(`${subs}/agent-cut.jsonl`, JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { tool: 'oops', description: 'long build' } }] } }), NOW - 5 * 60_000)
+  w.put(`${subs}/agent-cut.meta.json`, { agentType: 'general-purpose', description: 'Build' })
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  const run = (await pass($)) as { text: string }
+  expect(run.text).toContain('general-purpose · Build   ENDED')
 })

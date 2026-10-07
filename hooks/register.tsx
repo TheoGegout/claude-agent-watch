@@ -22,6 +22,10 @@ const CONVO_MS = 4000
 const STALE_MS = 20_000
 // Ended sessions stay on the board this long, then drop off.
 const KEEP_ENDED_MS = 10 * 60_000
+// A running subagent of an idle session, silent this long, was stopped rather than at work.
+const ORPHAN_MS = 3 * 60_000
+// Ids are names of files and folders: nothing else gets near a path.
+const ID = /^[A-Za-z0-9_-]{1,128}$/
 
 const self = atom({ plugin: 'agent-watch', key: 'self' } as const, {
   title: '',
@@ -59,6 +63,7 @@ const short = (text: string, max: number) => {
 
 const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path
 
+/** `Tool · what it works on`; the tool's own name wins over any `tool` field of its input. */
 const describeTool = (e: { tool: string; [argument: string]: unknown }) => {
   const pick = (key: string) => (typeof e[key] === 'string' ? (e[key] as string) : '')
   const detail =
@@ -69,16 +74,25 @@ const describeTool = (e: { tool: string; [argument: string]: unknown }) => {
     pick('url')
   return detail ? `${e.tool} · ${short(detail, 40)}` : e.tool
 }
+const describeCall = (name: string, input: unknown) =>
+  describeTool({ ...(input && typeof input === 'object' ? (input as Record<string, unknown>) : {}), tool: name })
 
 let folder = ''
 let home = ''
 let sessionId = ''
 let cwd = ''
 let wasWaiting = new Set<string>()
+let isFirstRead = true
 // The git branch of each folder, read again after a while.
 const branchCache = new Map<string, { at: number; branch?: string }>()
-// Which transcript the conversation was last read from, at what modification, when.
+// What the open conversation and agent page were last read from, and which one is wanted now:
+// a slower read of an earlier pick never overwrites the later one.
 let convoRead = { path: '', mtimeMs: 0, at: 0 }
+let convoWanted = ''
+let detailRead = { path: '', mtimeMs: 0 }
+let detailWanted = ''
+// The session the wide pane shows without one being picked; drawn by the render hook.
+let shownSession: string | undefined
 
 function setSelf($: EngineInterface, fn: (s: SelfStatus) => SelfStatus) {
   return update($, self, fn)
@@ -95,7 +109,7 @@ async function setLoop($: EngineInterface, state: LoopState, extra: Partial<Self
 }
 
 async function writeOwn($: EngineInterface) {
-  if (!folder || !sessionId) return
+  if (!folder || !ID.test(sessionId)) return
   const me = await read($, self)
   const now = await $.clock.now()
   const agents: AgentCard[] = (await $.agent.list().catch(() => [])).map(a => ({
@@ -118,8 +132,18 @@ async function writeOwn($: EngineInterface) {
     since: me.since,
     updatedAt: now,
     agents,
+    notify: notifyWaiting,
   }
   await $.fs.write(`${folder}/${sessionId}.json`, JSON.stringify(card))
+}
+
+/** After a /clear or a resume the process goes on under a new id, and no session.start says so. */
+async function followSessionId($: EngineInterface) {
+  const id = await $.session.id().catch(() => sessionId)
+  if (!id || id === sessionId || !ID.test(id)) return
+  sessionId = id
+  const now = await $.clock.now()
+  await setSelf($, () => ({ title: '', state: 'idle', since: now, agentTools: {}, agentWaiting: {} }))
 }
 
 // Claude Code's own registry of live sessions, one file per process: every
@@ -140,8 +164,6 @@ type Verdict = { state: LoopState; tool?: string; toolSince?: number; tokens?: T
 const metaCache = new Map<string, { agentType?: string; description?: string }>()
 const tailCache = new Map<string, { mtimeMs: number; readAt: number; verdict: Verdict }>()
 
-// A subagent writing to its transcript this recently is at work.
-const ACTIVE_MS = 30_000
 // A transcript that keeps changing is read again at most this often.
 const REREAD_MS = 5_000
 // A finished subagent stays on the board this long.
@@ -150,6 +172,9 @@ const KEEP_AGENT_MS = 10 * 60_000
 const READ_LIMIT = 4 * 1024 * 1024 - 64 * 1024
 
 const projectDir = (path: string) => path.replace(/[^A-Za-z0-9]/g, '-')
+const isNum = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n)
+const str = (s: unknown) => (typeof s === 'string' ? s : undefined)
+const num = (n: unknown) => (isNum(n) ? n : undefined)
 
 async function readJson($: EngineInterface, path: string): Promise<unknown> {
   try {
@@ -157,6 +182,41 @@ async function readJson($: EngineInterface, path: string): Promise<unknown> {
   } catch {
     return undefined
   }
+}
+
+/** A registry file as the mod needs it, or nothing when it does not hold one. */
+function asRegistered(raw: unknown): Registered | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const id = str(r.sessionId)
+  const where = str(r.cwd)
+  if (!id || !ID.test(id) || !where) return undefined
+  const host = str(r.hostSessionId)
+  return {
+    sessionId: id,
+    cwd: where,
+    name: str(r.name),
+    status: str(r.status),
+    waitingFor: str(r.waitingFor),
+    startedAt: num(r.startedAt),
+    updatedAt: num(r.updatedAt),
+    statusUpdatedAt: num(r.statusUpdatedAt),
+    hostSessionId: host && /^local_[A-Za-z0-9-]{1,64}$/.test(host) ? host : undefined,
+  }
+}
+
+/** A session's own report, when it is whole and of a shape this version reads. */
+function asReport(raw: unknown): SessionCard | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Partial<SessionCard>
+  if (typeof r.sessionId !== 'string' || !ID.test(r.sessionId)) return undefined
+  if (typeof r.cwd !== 'string' || !isNum(r.updatedAt) || !isNum(r.since) || !Array.isArray(r.agents)) return undefined
+  const states: LoopState[] = ['running', 'waiting', 'idle', 'ended']
+  if (!states.includes(r.state as LoopState)) return undefined
+  const agents = r.agents.filter(
+    (a): a is AgentCard => !!a && typeof a === 'object' && typeof a.id === 'string' && typeof a.status === 'string',
+  )
+  return { ...(r as SessionCard), title: typeof r.title === 'string' ? r.title : '', agents }
 }
 
 type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
@@ -173,8 +233,9 @@ type Row = {
  * when `isWhole`, the transcript read from its first line; its context's size).
  */
 function classifyLines(lines: string[], isWhole: boolean): Verdict {
-  const seen = new Set<string>()
-  let out = 0
+  // One response is written as one row per content block, its output count growing row by row:
+  // its last row's count is the response's.
+  const outByResponse = new Map<string, number>()
   let ctx: number | undefined
   let last: Row | undefined
   for (const line of lines) {
@@ -188,26 +249,23 @@ function classifyLines(lines: string[], isWhole: boolean): Verdict {
     last = row
     const usage = row.type === 'assistant' ? row.message?.usage : undefined
     if (usage) {
-      // One response is written as one row per content block, all with its usage.
       const id = row.message?.id ?? row.uuid ?? line
-      if (!seen.has(id)) {
-        seen.add(id)
-        out += usage.output_tokens ?? 0
-      }
+      outByResponse.set(id, Math.max(outByResponse.get(id) ?? 0, usage.output_tokens ?? 0))
       ctx = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
     }
   }
+  const out = [...outByResponse.values()].reduce((sum, n) => sum + n, 0)
   const tokens: Tokens | undefined = ctx === undefined ? undefined : { out: isWhole ? out : undefined, ctx }
   if (last?.type === 'assistant') {
     const content = Array.isArray(last.message?.content) ? last.message.content : []
     const call = content.find((c: { type?: string }) => c && c.type === 'tool_use') as
-      | { name?: string; input?: Record<string, unknown> }
+      | { name?: string; input?: unknown }
       | undefined
     if (call?.name) {
       const since = last.timestamp ? Date.parse(last.timestamp) : NaN
       return {
         state: 'running',
-        tool: describeTool({ tool: call.name, ...(call.input ?? {}) }),
+        tool: describeCall(call.name, call.input),
         toolSince: Number.isNaN(since) ? undefined : since,
         tokens,
       }
@@ -217,7 +275,7 @@ function classifyLines(lines: string[], isWhole: boolean): Verdict {
   return { state: 'running', tokens }
 }
 
-async function scanAgents($: EngineInterface, card: Registered, now: number): Promise<AgentCard[]> {
+async function scanAgents($: EngineInterface, card: Registered, now: number, visited: Set<string>): Promise<AgentCard[]> {
   const dir = `${home}/.claude/projects/${projectDir(card.cwd)}/${card.sessionId}/subagents`
   const entries = await $.fs.list(dir).catch(() => [])
   // A subagent's meta file is written once, when it is spawned.
@@ -228,12 +286,16 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
     const quiet = now - entry.mtimeMs
     if (quiet > KEEP_AGENT_MS) continue
     const id = entry.name.slice('agent-'.length, -'.jsonl'.length)
+    if (!ID.test(id)) continue
     const path = `${dir}/${entry.name}`
+    visited.add(path)
 
     let meta = metaCache.get(path)
     if (!meta) {
-      meta = ((await readJson($, `${dir}/agent-${id}.meta.json`)) ?? {}) as typeof meta & object
-      metaCache.set(path, meta)
+      const read = (await readJson($, `${dir}/agent-${id}.meta.json`)) as { agentType?: string; description?: string } | undefined
+      // A meta file not written yet is asked again on the next pass, not remembered empty.
+      if (read && (read.agentType || read.description)) metaCache.set(path, read)
+      meta = read ?? {}
     }
 
     let verdict: Verdict
@@ -242,9 +304,14 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
       verdict = cached.verdict
     } else {
       const isWhole = entry.size <= READ_LIMIT
-      const lines = await tailOf($, path, entry.size, isWhole ? Number.MAX_SAFE_INTEGER : 2000).catch(() => [] as string[])
-      verdict = lines.length > 0 ? classifyLines(lines, isWhole) : { state: quiet < 5 * 60_000 ? 'running' : 'ended' }
-      tailCache.set(path, { mtimeMs: entry.mtimeMs, readAt: now, verdict })
+      const lines = await tailOf($, path, entry.size, isWhole ? Number.MAX_SAFE_INTEGER : 2000).catch(() => undefined)
+      if (lines) {
+        verdict = classifyLines(lines, isWhole)
+        tailCache.set(path, { mtimeMs: entry.mtimeMs, readAt: now, verdict })
+      } else {
+        // Unreadable this time: judged by its last write, and asked again next pass.
+        verdict = cached?.verdict ?? { state: quiet < 5 * 60_000 ? 'running' : 'ended' }
+      }
     }
     agents.push({
       id,
@@ -262,17 +329,29 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
   return agents.sort((a, b) => Number(a.status !== 'running') - Number(b.status !== 'running'))
 }
 
-/** The branch a folder's repository is on: its own `.git/HEAD`, or a parent's. */
+/** The branch a folder's repository is on: its own `.git/HEAD`, a worktree's, or a parent's. */
 async function branchOf($: EngineInterface, cwd: string, now: number): Promise<string | undefined> {
   const cached = branchCache.get(cwd)
   if (cached && now - cached.at < 15_000) return cached.branch
+  const fromHead = (head: string) => {
+    const ref = head.trim().match(/^ref: refs\/heads\/(.+)$/)
+    return ref ? ref[1] : head.trim().slice(0, 7)
+  }
   let branch: string | undefined
   let dir = cwd.replace(/\\/g, '/').replace(/\/$/, '')
   for (let depth = 0; depth < 6 && dir; depth += 1) {
     const head = await $.fs.read(`${dir}/.git/HEAD`).catch(() => undefined)
     if (head !== undefined) {
-      const ref = head.trim().match(/^ref: refs\/heads\/(.+)$/)
-      branch = ref ? ref[1] : head.trim().slice(0, 7)
+      branch = fromHead(head)
+      break
+    }
+    // A worktree or a submodule: `.git` is a file naming the real git folder.
+    const pointer = await $.fs.read(`${dir}/.git`).catch(() => undefined)
+    const gitdir = pointer?.trim().match(/^gitdir:\s*(.+)$/)?.[1]?.replace(/\\/g, '/')
+    if (gitdir) {
+      const where = /^([A-Za-z]:)?\//.test(gitdir) ? gitdir : `${dir}/${gitdir}`
+      const real = await $.fs.read(`${where}/HEAD`).catch(() => undefined)
+      if (real !== undefined) branch = fromHead(real)
       break
     }
     const cut = dir.lastIndexOf('/')
@@ -286,83 +365,103 @@ async function branchOf($: EngineInterface, cwd: string, now: number): Promise<s
 async function readAll($: EngineInterface) {
   if (!folder) return
   const now = await $.clock.now()
+  const visited = new Set<string>()
 
   // What sessions running this mod wrote: the finer detail (tool, waiting reason).
   const reports = new Map<string, SessionCard>()
-  const live = new Set<string>()
   for (const entry of await $.fs.list(folder).catch(() => [])) {
-    if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
+    if (entry.kind !== 'file' || !entry.name.endsWith('.json') || entry.name.startsWith('_')) continue
     if (now - entry.mtimeMs > KEEP_ENDED_MS) continue
-    const card = (await readJson($, `${folder}/${entry.name}`)) as SessionCard | undefined
-    if (card?.sessionId) {
-      reports.set(card.sessionId, card)
-      if (now - card.updatedAt < STALE_MS) live.add(card.sessionId)
-    }
+    const card = asReport(await readJson($, `${folder}/${entry.name}`))
+    if (card) reports.set(card.sessionId, card)
   }
+  const isLiveReport = (r: SessionCard) => r.state !== 'ended' && now - r.updatedAt < STALE_MS
+  // The sessions that send system notifications: this one and every live one with them on.
+  const senders = [
+    ...(notifyWaiting ? [sessionId] : []),
+    ...[...reports.values()].filter(r => r.sessionId !== sessionId && isLiveReport(r) && r.notify !== false).map(r => r.sessionId),
+  ].sort()
 
-  const sessions: SessionCard[] = []
+  // The registry, one entry a session: a resumed one can hold two files, the newest wins.
+  const registered = new Map<string, Registered>()
   const registry = `${home}/.claude/sessions`
   for (const entry of await $.fs.list(registry).catch(() => [])) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
-    const reg = (await readJson($, `${registry}/${entry.name}`)) as Registered | undefined
-    if (!reg?.sessionId || !reg.cwd) continue
-    const report = reports.get(reg.sessionId)
-    reports.delete(reg.sessionId)
-    const isFresh = report !== undefined && now - report.updatedAt < STALE_MS
-
-    const state: LoopState = reg.waitingFor
-      ? 'waiting'
-      : reg.status === 'busy'
-        ? isFresh && report.state === 'waiting' ? 'waiting' : 'running'
-        : 'idle'
-    const scanned = await scanAgents($, reg, now)
-    const known = isFresh ? report.agents : []
-    const agents = [
-      ...known.map(k => {
-        const found = scanned.find(a => a.id === k.id)
-        return found
-          ? {
-              ...k,
-              startedAt: found.startedAt,
-              endedAt: found.endedAt,
-              lastActivity: found.lastActivity,
-              tokens: found.tokens,
-              toolSince: found.toolSince,
-              tool: k.tool ?? found.tool,
-            }
-          : k
-      }),
-      ...scanned.filter(a => !known.some(k => k.id === a.id)),
-    ]
-    sessions.push({
-      sessionId: reg.sessionId,
-      hostId: reg.hostSessionId,
-      branch: await branchOf($, reg.cwd, now),
-      startedAt: reg.startedAt,
-      cwd: reg.cwd,
-      title: reg.name || report?.title || '',
-      state,
-      waiting: state === 'waiting' ? (isFresh && report.waiting) || reg.waitingFor || t.waitingFallback : undefined,
-      tool: state === 'running' && isFresh ? report.tool : undefined,
-      toolSince: state === 'running' && isFresh ? report.toolSince : undefined,
-      since: reg.statusUpdatedAt ?? reg.updatedAt ?? reg.startedAt ?? now,
-      updatedAt: reg.updatedAt ?? now,
-      agents,
-    })
+    const reg = asRegistered(await readJson($, `${registry}/${entry.name}`))
+    if (!reg) continue
+    const other = registered.get(reg.sessionId)
+    if (!other || (reg.updatedAt ?? 0) > (other.updatedAt ?? 0)) registered.set(reg.sessionId, reg)
   }
 
-  // Of the sessions that run this mod, one notifies: the first by id.
-  const notifier = [sessionId, ...live].sort()[0]
+  const sessions: SessionCard[] = []
+  for (const reg of registered.values()) {
+    try {
+      const report = reports.get(reg.sessionId)
+      reports.delete(reg.sessionId)
+      const isFresh = report !== undefined && isLiveReport(report)
+
+      // The registry is the authority on whether a session waits; a report only says on what.
+      const state: LoopState = reg.waitingFor ? 'waiting' : reg.status === 'busy' ? 'running' : 'idle'
+      const scanned = await scanAgents($, reg, now, visited)
+      const known = isFresh ? report.agents : []
+      const merged = [
+        // What the session lists of its own: those still at work, and those its transcripts still show.
+        ...known
+          .filter(k => {
+            const st = agentState(k.status, k.waiting)
+            return st === 'running' || st === 'waiting' || scanned.some(a => a.id === k.id)
+          })
+          .map(k => {
+            const found = scanned.find(a => a.id === k.id)
+            return found
+              ? {
+                  ...k,
+                  startedAt: found.startedAt,
+                  endedAt: found.endedAt,
+                  lastActivity: found.lastActivity,
+                  tokens: found.tokens,
+                  toolSince: found.toolSince,
+                  tool: k.tool ?? found.tool,
+                }
+              : k
+          }),
+        ...scanned.filter(a => !known.some(k => k.id === a.id)),
+      ]
+      // A subagent left "running" in a session gone idle, silent for minutes, was stopped.
+      const agents = merged.map(a =>
+        state === 'idle' && a.status === 'running' && !a.waiting && a.lastActivity !== undefined && now - a.lastActivity > ORPHAN_MS
+          ? { ...a, status: 'completed', tool: undefined, endedAt: a.lastActivity }
+          : a,
+      )
+      sessions.push({
+        sessionId: reg.sessionId,
+        hostId: reg.hostSessionId,
+        branch: await branchOf($, reg.cwd, now),
+        startedAt: reg.startedAt,
+        cwd: reg.cwd,
+        title: reg.name || report?.title || '',
+        state,
+        waiting: state === 'waiting' ? (isFresh && report.state === 'waiting' && report.waiting) || reg.waitingFor || t.waitingFallback : undefined,
+        tool: state === 'running' && isFresh ? report.tool : undefined,
+        toolSince: state === 'running' && isFresh ? report.toolSince : undefined,
+        since: reg.statusUpdatedAt ?? reg.updatedAt ?? reg.startedAt ?? now,
+        updatedAt: reg.updatedAt ?? now,
+        agents,
+      })
+    } catch (err) {
+      $.ui.log(`agent-watch: skipped session ${reg.sessionId}: ${err}`, { to: 'debug' })
+    }
+  }
 
   // A session that reported but left the registry has ended.
   for (const card of reports.values()) {
-    const isStale = now - card.updatedAt > STALE_MS
-    sessions.push(
-      isStale || card.state === 'ended'
-        ? { ...card, state: 'ended', waiting: undefined, tool: undefined, agents: [] }
-        : card,
-    )
+    sessions.push(isLiveReport(card) ? card : { ...card, state: 'ended', waiting: undefined, tool: undefined, agents: [] })
   }
+
+  // Caches keep what this pass met, and nothing else.
+  for (const key of [...metaCache.keys()]) if (!visited.has(key)) metaCache.delete(key)
+  for (const key of [...tailCache.keys()]) if (!visited.has(key)) tailCache.delete(key)
+  for (const key of [...branchCache.keys()]) if (!sessions.some(c => c.cwd === key)) branchCache.delete(key)
 
   const rank: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
   sessions.sort((a, b) => rank[liveState(a)] - rank[liveState(b)] || b.since - a.since)
@@ -373,11 +472,13 @@ async function readAll($: EngineInterface) {
   if (isChanged || isClockDue) await update($, board, () => ({ now, sessions }))
   await update($, seen, marks => {
     const missing = sessions.filter(c => marks[c.sessionId] === undefined)
-    if (missing.length === 0) return marks
-    return { ...marks, ...Object.fromEntries(missing.map(c => [c.sessionId, now])) }
+    const gone = Object.keys(marks).filter(id => !sessions.some(c => c.sessionId === id))
+    if (missing.length === 0 && gone.length === 0) return marks
+    const kept = Object.fromEntries(Object.entries(marks).filter(([id]) => !gone.includes(id)))
+    return { ...kept, ...Object.fromEntries(missing.map(c => [c.sessionId, now])) }
   })
 
-  // Status line and a toast when another session starts waiting on the person.
+  // Status line and notifications when a session starts waiting on the person.
   let running = 0
   let waiting = 0
   const waitingNow = new Set<string>()
@@ -388,15 +489,21 @@ async function readAll($: EngineInterface) {
     waiting += waits
     if (waits > 0) waitingNow.add(c.sessionId)
   }
-  for (const id of waitingNow) {
-    if (notifyWaiting && id !== sessionId && !wasWaiting.has(id)) {
+  // For a session that waits, the first of the other senders by id sends it (itself when it is
+  // the only one): nobody is left out, nobody sends it twice.
+  const senderFor = (id: string) => senders.find(s => s !== id) ?? (senders.includes(id) ? id : undefined)
+  // The sessions already waiting when this process first looked are not news.
+  if (!isFirstRead) {
+    for (const id of waitingNow) {
+      if (wasWaiting.has(id)) continue
       const c = sessions.find(one => one.sessionId === id)
       if (!c) continue
       const who = `${baseName(c.cwd)} — ${short(c.title || t.newSession, 40)}`
-      $.ui.toast(t.isWaitingForYou(who))
-      if (notifier === sessionId) void notifySystem($, t.notifyTitle, `${who}${c.waiting ? ` · ${c.waiting}` : ''}`, c.hostId)
+      if (notifyWaiting && id !== sessionId) $.ui.toast(t.isWaitingForYou(who))
+      if (senderFor(id) === sessionId) void notifySystem($, t.notifyTitle, `${who}${c.waiting ? ` · ${c.waiting}` : ''}`, c.hostId)
     }
   }
+  isFirstRead = false
   wasWaiting = waitingNow
   if (showStatusLine) {
     const parts = [running && t.statusRunning(running), waiting && t.statusWaiting(waiting)].filter(Boolean)
@@ -432,9 +539,9 @@ function readTranscript(first: string, tail: string[]): Omit<AgentDetail, 'agent
     const entry = parse(line)
     if (entry?.type !== 'assistant' || !Array.isArray(entry.message?.content)) continue
     const at = entry.timestamp ? new Date(entry.timestamp).toTimeString().slice(0, 8) : undefined
-    for (const block of entry.message.content as { type?: string; name?: string; input?: Record<string, unknown> }[]) {
+    for (const block of entry.message.content as { type?: string; name?: string; input?: unknown }[]) {
       if (block?.type === 'tool_use' && block.name) {
-        const full = describeTool({ tool: block.name, ...(block.input ?? {}) })
+        const full = describeCall(block.name, block.input)
         tools.push({ name: block.name, detail: full.slice(block.name.length + 3), at })
       }
     }
@@ -448,17 +555,27 @@ function readTranscript(first: string, tail: string[]): Omit<AgentDetail, 'agent
   }
 }
 
-async function loadDetail($: EngineInterface, sessionId: string, agentId: string) {
-  await update($, detail, () => ({ agentId, isLoading: true, tools: [] }))
+/** Reads a subagent's page again when its transcript changed; the latest pick wins. */
+async function loadDetail($: EngineInterface, sessionId: string, agentId: string, isForced: boolean) {
+  const wanted = `${sessionId}/${agentId}`
+  detailWanted = wanted
   const card = (await read($, board)).sessions.find(c => c.sessionId === sessionId)
-  if (!card) return
+  if (!card) {
+    await update($, detail, () => ({ agentId, isLoading: false, tools: [], error: 'session gone' }))
+    return
+  }
   const path = `${home}/.claude/projects/${projectDir(card.cwd)}/${sessionId}/subagents/agent-${agentId}.jsonl`
   try {
     const stat = await $.fs.stat(path)
+    if (!isForced && detailRead.path === path && detailRead.mtimeMs === stat.mtimeMs) return
+    if (isForced) await update($, detail, () => ({ agentId, isLoading: true, tools: [] }))
     const lines = await tailOf($, path, stat.size, 120, true)
+    if (detailWanted !== wanted) return
     const found = readTranscript(lines[0] ?? '', lines.slice(1))
+    detailRead = { path, mtimeMs: stat.mtimeMs }
     await update($, detail, () => ({ agentId, isLoading: false, ...found }))
   } catch (err) {
+    if (detailWanted !== wanted) return
     await update($, detail, () => ({ agentId, isLoading: false, tools: [], error: String(err) }))
   }
 }
@@ -474,7 +591,9 @@ async function tailOf($: EngineInterface, path: string, size: number, lines: num
     ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/tail.ps1`],
     { env: { AW_PATH: path, AW_BYTES: String(1024 * 1024), ...(withFirst ? { AW_FIRST: '1' } : {}) }, timeoutMs: 15_000 },
   )
-  const all = run.stdout.trimEnd().split(/\r?\n/)
+  const out = run.stdout.trimEnd()
+  if (run.exitCode !== 0 || out === '') throw new Error(`tail.ps1 exited ${run.exitCode}: ${run.stderr.trim().slice(0, 200)}`)
+  const all = out.split(/\r?\n/)
   return withFirst ? [all[0] ?? '', ...all.slice(1).slice(-lines)] : all.slice(-lines)
 }
 
@@ -511,9 +630,9 @@ function readConversation(lines: string[]): Omit<SessionConvo, 'sessionId' | 'is
       if (entry.message.model && !entry.message.model.startsWith('<')) model = entry.message.model
     }
     if (entry.type === 'assistant' && Array.isArray(entry.message?.content)) {
-      for (const block of entry.message.content as { type?: string; name?: string; input?: Record<string, unknown> }[]) {
+      for (const block of entry.message.content as { type?: string; name?: string; input?: unknown }[]) {
         if (block?.type === 'tool_use' && block.name) {
-          const full = describeTool({ tool: block.name, ...(block.input ?? {}) })
+          const full = describeCall(block.name, block.input)
           tools.push({ name: block.name, detail: full.slice(block.name.length + 3), at: timeOf(entry.timestamp) })
         }
       }
@@ -528,8 +647,9 @@ function readConversation(lines: string[]): Omit<SessionConvo, 'sessionId' | 'is
   return { prompt: cut(prompt, 700), promptAt, answer: cut(answer, 2500), answerAt, tools: tools.slice(-8), ctx, model }
 }
 
-/** Reads a session's conversation again when its transcript changed, at most every CONVO_MS. */
+/** Reads a session's conversation again when its transcript changed, at most every CONVO_MS; the latest pick wins. */
 async function loadConvo($: EngineInterface, sessionId: string, isForced: boolean) {
+  convoWanted = sessionId
   const card = (await read($, board)).sessions.find(c => c.sessionId === sessionId)
   if (!card) return
   const path = `${home}/.claude/projects/${projectDir(card.cwd)}/${sessionId}.jsonl`
@@ -537,12 +657,14 @@ async function loadConvo($: EngineInterface, sessionId: string, isForced: boolea
   try {
     const stat = await $.fs.stat(path)
     const isSame = convoRead.path === path && convoRead.mtimeMs === stat.mtimeMs
-    if (!isForced && (isSame || now - convoRead.at < CONVO_MS)) return
-    convoRead = { path, mtimeMs: stat.mtimeMs, at: now }
+    if (!isForced && (isSame || (convoRead.path === path && now - convoRead.at < CONVO_MS))) return
     if (isForced) await update($, convo, () => ({ sessionId, isLoading: true, tools: [] }))
     const found = readConversation(await tailOf($, path, stat.size, 400))
+    if (convoWanted !== sessionId) return
+    convoRead = { path, mtimeMs: stat.mtimeMs, at: now }
     await update($, convo, () => ({ sessionId, isLoading: false, ...found }))
   } catch (err) {
+    if (convoWanted !== sessionId) return
     await update($, convo, () => ({ sessionId, isLoading: false, tools: [], error: String(err) }))
   }
 }
@@ -591,8 +713,8 @@ async function loadPreferences($: EngineInterface) {
   const kept = (await $.store.get('preferences').catch(() => undefined)) as
     | { notifyWaiting?: boolean; statusLine?: boolean; language?: 'en' | 'fr' }
     | undefined
-  if (kept?.notifyWaiting !== undefined) notifyWaiting = kept.notifyWaiting
-  if (kept?.statusLine !== undefined) showStatusLine = kept.statusLine
+  if (typeof kept?.notifyWaiting === 'boolean') notifyWaiting = kept.notifyWaiting
+  if (typeof kept?.statusLine === 'boolean') showStatusLine = kept.statusLine
   if (kept?.language === 'en' || kept?.language === 'fr') {
     language = kept.language
     t = STRINGS[language]
@@ -606,20 +728,46 @@ async function savePreferences($: EngineInterface) {
   $.ui.invalidate('ui.render')
 }
 
-async function tick($: EngineInterface) {
+async function tickOnce($: EngineInterface) {
+  await followSessionId($).catch(() => {})
   await writeOwn($).catch(err => $.ui.log(`agent-watch: could not write: ${err}`, { to: 'debug' }))
   await readAll($).catch(err => $.ui.log(`agent-watch: could not read: ${err}`, { to: 'debug' }))
   const at = await read($, route)
-  if (at.view !== 'list') {
-    const looked = (await read($, board)).sessions.find(c => c.sessionId === at.sessionId)
+  // The session on screen: the one picked, or the one the wide pane shows by itself.
+  const looking = at.view !== 'list' ? at.sessionId : shownSession
+  if (looking) {
+    const looked = (await read($, board)).sessions.find(c => c.sessionId === looking)
     const marks = await read($, seen)
     const newest = Math.max(looked?.since ?? 0, ...(looked?.agents.map(a => a.endedAt ?? 0) ?? []))
-    if (looked && newest > (marks[at.sessionId] ?? 0)) {
+    if (looked && newest > (marks[looking] ?? 0)) {
       const now = await $.clock.now()
-      await update($, seen, all => ({ ...all, [at.sessionId]: now }))
+      await update($, seen, all => ({ ...all, [looking]: now }))
     }
+    if (at.view !== 'agent') await loadConvo($, looking, false).catch(() => {})
   }
-  if (at.view === 'session') await loadConvo($, at.sessionId, false).catch(() => {})
+  if (at.view === 'agent') await loadDetail($, at.sessionId, at.agentId, false).catch(() => {})
+}
+
+// One pass at a time: a call made while one runs asks for one more pass after it, never a second
+// pass at once (which would race the first and write older data over newer).
+let ticking: Promise<void> | undefined
+let isTickAsked = false
+function tick($: EngineInterface): Promise<void> {
+  if (ticking) {
+    isTickAsked = true
+    return ticking
+  }
+  ticking = (async () => {
+    do {
+      isTickAsked = false
+      // A pass that fails (the module unloading under it, a file gone) is logged, never thrown at
+      // a caller that did not wait for it.
+      await tickOnce($).catch(err => $.ui.log(`agent-watch: a pass failed: ${err}`, { to: 'debug' }))
+    } while (isTickAsked)
+  })().finally(() => {
+    ticking = undefined
+  })
+  return ticking
 }
 
 export const register: Register = (on, options) => {
@@ -665,11 +813,13 @@ export const register: Register = (on, options) => {
     return { text: t.paneOpened }
   })
 
+  // The hooks below sit on the turn's path: they note what changed and let the next pass read the
+  // board, never holding the turn, a dialog or a question for it.
   on('turn.start', async ($, e, next) => {
     const me = await read($, self)
     const title = me.title || (e.text ? short(e.text, 80) : '')
     await setLoop($, 'running', { title, waiting: undefined, tool: undefined })
-    await tick($)
+    void tick($)
 
     return next(e)
   })
@@ -677,7 +827,7 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       await setLoop($, 'idle', { waiting: undefined, tool: undefined })
-      await tick($)
+      void tick($)
     }
 
     return next(e)
@@ -696,7 +846,7 @@ export const register: Register = (on, options) => {
         agentWaiting: asking ? { ...s.agentWaiting, [agent]: asking } : s.agentWaiting,
       }))
     }
-    if (asking) await tick($)
+    if (asking) void tick($)
 
     try {
       return await next(e)
@@ -725,12 +875,14 @@ export const register: Register = (on, options) => {
     } else {
       await setSelf($, s => ({ ...s, agentWaiting: { ...s.agentWaiting, [agent]: why } }))
     }
-    await tick($)
+    void tick($)
 
     return next(e)
   })
 
   on('session.end', async ($, e, next) => {
+    // The ending session's card says so; after a /clear or a resume the process goes on, and the
+    // next pass follows it under its new id.
     await setLoop($, 'ended', { waiting: undefined, tool: undefined })
     await writeOwn($).catch(() => {})
 
@@ -769,8 +921,15 @@ export const register: Register = (on, options) => {
       go: (to: Route) => {
         void update($, route, () => to)
         if (to.view !== 'list') void $.clock.now().then(now => update($, seen, marks => ({ ...marks, [to.sessionId]: now })))
-        if (to.view === 'agent') void loadDetail($, to.sessionId, to.agentId)
+        if (to.view === 'agent') void loadDetail($, to.sessionId, to.agentId, true)
         if (to.view === 'session') void loadConvo($, to.sessionId, true)
+      },
+      showing: (id: string | undefined) => {
+        // Drawn without a pick: the next pass loads its conversation and marks it seen.
+        if (id !== shownSession) {
+          shownSession = id
+          void tick($)
+        }
       },
       openSession: (hostId: string) => void openInApp($, hostId),
       refresh: () => void tick($),

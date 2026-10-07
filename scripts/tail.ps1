@@ -1,7 +1,7 @@
 # Prints the end of a large file (AW_BYTES of it, cut to whole lines), and its
 # first line before it when AW_FIRST is set: a seek, not a read of the file.
 $ErrorActionPreference = 'Stop'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
 $fs = [IO.File]::Open($env:AW_PATH, 'Open', 'Read', 'ReadWrite')
 try {
   $len = $fs.Length

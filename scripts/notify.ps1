@@ -4,8 +4,14 @@ $ErrorActionPreference = 'Stop'
 [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
 [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
 
-$title = [Security.SecurityElement]::Escape($env:AW_TITLE)
-$body = [Security.SecurityElement]::Escape($env:AW_BODY)
+# XML takes no control characters; a toast shows a few lines at most.
+function Clean([string]$text, [int]$max) {
+  $text = [regex]::Replace([string]$text, '[\x00-\x08\x0B\x0C\x0E-\x1F]', ' ')
+  if ($text.Length -gt $max) { $text = $text.Substring(0, $max - 1) + '…' }
+  [Security.SecurityElement]::Escape($text)
+}
+$title = Clean $env:AW_TITLE 120
+$body = Clean $env:AW_BODY 240
 $launch = ''
 if ($env:AW_LINK) { $launch = ' activationType="protocol" launch="' + [Security.SecurityElement]::Escape($env:AW_LINK) + '"' }
 
