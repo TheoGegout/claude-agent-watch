@@ -370,8 +370,8 @@ test('herdr touches: the branch, the model and the context, numbered projects', 
 test('o opens the selected session, never this one', async ($, on) => {
   const clock = mock.clock(on, { now: NOW })
   const w = world(on, clock.now)
-  w.put(`${REGISTRY}/1.json`, { sessionId: ME, cwd: 'D:\', name: 'Here', status: 'busy', hostSessionId: 'local_me-1' })
-  w.put(`${REGISTRY}/2.json`, { sessionId: 'other', cwd: 'D:\', name: 'Elsewhere', status: 'idle', hostSessionId: 'local_other-2' })
+  w.put(`${REGISTRY}/1.json`, { sessionId: ME, cwd: 'D:/', name: 'Here', status: 'busy', hostSessionId: 'local_me-1' })
+  w.put(`${REGISTRY}/2.json`, { sessionId: 'other', cwd: 'D:/', name: 'Elsewhere', status: 'idle', hostSessionId: 'local_other-2' })
 
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
