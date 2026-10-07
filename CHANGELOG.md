@@ -6,10 +6,12 @@ A clickable panel in place of the plain list.
 
 - Header with the count of sessions running, waiting, idle and ended; each count filters.
 - One card per session: status badge, folder, how long it has been so, a callout when it waits for you, and its subagents with their badge, elapsed time and current activity. Cards fold (`▴`).
-- Click a session for its page (folder, state, waiting reason, current tool, subagents); click a subagent for its page (its task, its last tool calls, its last words, read from its transcript). `b` goes back.
+- Click a session for its page (folder, state, waiting reason, current tool, subagents, and its **conversation**: your last message, Claude's last words in Markdown, its last tool calls, kept current while the page is open); click a subagent for its page (its task, its last tool calls, its last words, read from its transcript). `b` goes back.
 - **Open ↗** brings that session up in the Claude desktop app, through the app's `claude://code/continue` link.
 - Sidebar from 100 columns: filters (`1`–`5`), settings that change `/config` in place (`l` language, `n` notifications, `s` status line), shortcuts and version. Narrower panes get the filters as one row.
 - The pane follows the app's own theme, on every surface.
+- The board refreshes every second instead of every three.
+- When another session starts waiting for you, a **system notification** with its sound (Windows toast, macOS notification, `notify-send` on Linux); clicking it on Windows opens that session. One session sends it, not each one running the mod.
 - Subagents show how long they ran, from their spawn time.
 
 ## 0.1.0 — 2026-10-07

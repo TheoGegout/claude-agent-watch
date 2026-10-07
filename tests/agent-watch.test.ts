@@ -53,7 +53,7 @@ function world(on: On, now: () => number) {
     return { value: { kind: 'file' as const, size: file.text.length, mtimeMs: file.mtimeMs, isLink: false } }
   })
   on('process.run', (_$, e) => {
-    opened.push(e.argv.join(' '))
+    opened.push([...e.argv, JSON.stringify(e.init?.env ?? {})].join(' '))
     return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('ui.toast', (_$, e) => {
@@ -125,10 +125,26 @@ test('sessions without the mod show from the registry, with their subagents', as
   )
   w.put(`${subs}/agent-done.meta.json`, { agentType: 'Explore', description: 'Find the handlers' })
   w.put(`${subs}/agent-old.jsonl`, '{}\n', NOW - 60 * 60_000)
+  w.put(
+    `${HOME}/.claude/projects/D--Dev-webshop/other.jsonl`,
+    [
+      { type: 'user', timestamp: '2026-10-07T10:00:00Z', message: { content: 'Add the coupon field to checkout' } },
+      { type: 'user', isMeta: true, message: { content: 'a reminder the person never typed' } },
+      { type: 'assistant', timestamp: '2026-10-07T10:01:00Z', message: { content: [{ type: 'tool_use', name: 'Edit', input: { file_path: 'D:/Dev/webshop/checkout.tsx' } }] } },
+      { type: 'assistant', timestamp: '2026-10-07T10:02:00Z', message: { content: [{ type: 'text', text: 'The **coupon field** is in.' }] } },
+    ]
+      .map(row => JSON.stringify(row))
+      .join('\n'),
+  )
 
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   expect(w.own().state).toBe('idle')
   expect(w.toasts.some(t => t.includes('Checkout flow') && t.includes('is waiting for you'))).toBe(true)
+  // The system's own notification, once, which opens that session when clicked.
+  const notes = w.opened.filter(line => line.includes('notify.ps1'))
+  expect(notes.length).toBe(1)
+  expect(notes[0]).toContain('claude://code/continue?session=local_abc-123')
+  expect(notes[0]).toContain('Checkout flow')
 
   await $.turn.start({ text: 'write the release notes', turnId: 't1' })
   expect(w.own().state).toBe('running')
@@ -164,6 +180,11 @@ test('sessions without the mod show from the registry, with their subagents', as
     await ui.press({ key: 'session-other' })
     expect(await ui.find({ text: /SUBAGENTS · 3/ })).toBeDefined()
     expect(await ui.find({ text: /Open in the app/ })).toBeDefined()
+    expect(await ui.find({ text: /CONVERSATION/ })).toBeDefined()
+    expect(await ui.find({ text: /Add the coupon field to checkout/ })).toBeDefined()
+    expect(await ui.find({ text: /a reminder the person never typed/ })).toBeUndefined()
+    expect(await ui.find({ type: 'Markdown' })).toBeDefined()
+    expect(await ui.find({ text: /checkout\.tsx/ })).toBeDefined()
     await ui.press({ key: 'agent-other-long' })
     expect(await ui.find({ text: /LAST TOOL CALLS/ })).toBeDefined()
     expect(await ui.find({ text: /Bundle the app for release/ })).toBeDefined()
@@ -242,6 +263,7 @@ test('the notification and the status line can be turned off', { options: { noti
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   expect(w.toasts).toEqual([])
   expect(w.status).toEqual([])
+  expect(w.opened.filter(line => line.includes('notify.ps1'))).toEqual([])
 })
 
 test('a narrow pane drops the sidebar for a filter row', async ($, on) => {

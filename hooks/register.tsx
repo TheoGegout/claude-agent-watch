@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentCard, AgentDetail, Board, Filter, LoopState, Route, SelfStatus, SessionCard } from '../types'
+import type { AgentCard, AgentDetail, Board, Filter, LoopState, Route, SelfStatus, SessionCard, SessionConvo } from '../types'
 import { STRINGS } from './strings'
 import type { Strings } from './strings'
 import { agentState, clock, drawApp, liveState, sessionLink } from './view'
@@ -10,7 +10,10 @@ import type { Actions, Kit, ViewModel } from './view'
 const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
 const VERSION = '0.2.0'
-const TICK_MS = 3000
+// The board is read again every second: what the registry says, as it says it.
+const TICK_MS = 1000
+// A busy conversation is read again at most this often (its transcript can be large).
+const CONVO_MS = 4000
 // A session that has not written for this long is closed (or its app is).
 const STALE_MS = 20_000
 // Ended sessions stay on the board this long, then drop off.
@@ -28,6 +31,7 @@ const filter = atom({ plugin: 'agent-watch', key: 'filter' } as const, 'all')
 const collapsed = atom({ plugin: 'agent-watch', key: 'collapsed' } as const, [])
 const route = atom({ plugin: 'agent-watch', key: 'route' } as const, { view: 'list' } as Route)
 const detail = atom({ plugin: 'agent-watch', key: 'detail' } as const, null as AgentDetail | null)
+const convo = atom({ plugin: 'agent-watch', key: 'convo' } as const, null as SessionConvo | null)
 
 // The words shown, set from the `language` option at load.
 let t: Strings = STRINGS.en
@@ -65,6 +69,8 @@ let home = ''
 let sessionId = ''
 let cwd = ''
 let wasWaiting = new Set<string>()
+// Which transcript the conversation was last read from, at what modification, when.
+let convoRead = { path: '', mtimeMs: 0, at: 0 }
 
 function setSelf($: EngineInterface, fn: (s: SelfStatus) => SelfStatus) {
   return update($, self, fn)
@@ -219,11 +225,15 @@ async function readAll($: EngineInterface) {
 
   // What sessions running this mod wrote: the finer detail (tool, waiting reason).
   const reports = new Map<string, SessionCard>()
+  const live = new Set<string>()
   for (const entry of await $.fs.list(folder).catch(() => [])) {
     if (entry.kind !== 'file' || !entry.name.endsWith('.json')) continue
     if (now - entry.mtimeMs > KEEP_ENDED_MS) continue
     const card = (await readJson($, `${folder}/${entry.name}`)) as SessionCard | undefined
-    if (card?.sessionId) reports.set(card.sessionId, card)
+    if (card?.sessionId) {
+      reports.set(card.sessionId, card)
+      if (now - card.updatedAt < STALE_MS) live.add(card.sessionId)
+    }
   }
 
   const sessions: SessionCard[] = []
@@ -265,6 +275,9 @@ async function readAll($: EngineInterface) {
     })
   }
 
+  // Of the sessions that run this mod, one notifies: the first by id.
+  const notifier = [sessionId, ...live].sort()[0]
+
   // A session that reported but left the registry has ended.
   for (const card of reports.values()) {
     const isStale = now - card.updatedAt > STALE_MS
@@ -293,7 +306,10 @@ async function readAll($: EngineInterface) {
   for (const id of waitingNow) {
     if (notifyWaiting && id !== sessionId && !wasWaiting.has(id)) {
       const c = sessions.find(one => one.sessionId === id)
-      if (c) $.ui.toast(t.isWaitingForYou(`${baseName(c.cwd)} — ${short(c.title || t.newSession, 40)}`))
+      if (!c) continue
+      const who = `${baseName(c.cwd)} — ${short(c.title || t.newSession, 40)}`
+      $.ui.toast(t.isWaitingForYou(who))
+      if (notifier === sessionId) void notifySystem($, t.notifyTitle, `${who}${c.waiting ? ` · ${c.waiting}` : ''}`, c.hostId)
     }
   }
   wasWaiting = waitingNow
@@ -354,23 +370,109 @@ async function loadDetail($: EngineInterface, sessionId: string, agentId: string
   const path = `${home}/.claude/projects/${projectDir(card.cwd)}/${sessionId}/subagents/agent-${agentId}.jsonl`
   try {
     const stat = await $.fs.stat(path)
-    let lines: string[]
-    if (stat.size <= READ_LIMIT) {
-      lines = (await $.fs.read(path)).trimEnd().split('\n')
-    } else {
-      // Too big for one read: its first line and its tail, through the shell.
-      const script =
-        "$p=$env:AW_PATH; Get-Content -LiteralPath $p -TotalCount 1 -Encoding UTF8; Get-Content -LiteralPath $p -Tail 120 -Encoding UTF8"
-      const run = await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', script], {
-        env: { AW_PATH: path },
-        timeoutMs: 15_000,
-      })
-      lines = run.stdout.trimEnd().split(/\r?\n/)
-    }
-    const found = readTranscript(lines[0] ?? '', lines.slice(-120))
+    const lines = await tailOf($, path, stat.size, 120, true)
+    const found = readTranscript(lines[0] ?? '', lines.slice(1))
     await update($, detail, () => ({ agentId, isLoading: false, ...found }))
   } catch (err) {
     await update($, detail, () => ({ agentId, isLoading: false, tools: [], error: String(err) }))
+  }
+}
+
+/** The last lines of a file: whole when one read can hold it, else through the shell. */
+async function tailOf($: EngineInterface, path: string, size: number, lines: number, withFirst = false) {
+  if (size <= READ_LIMIT) {
+    const all = (await $.fs.read(path)).trimEnd().split('\n')
+    return withFirst ? [all[0] ?? '', ...all.slice(-lines)] : all.slice(-lines)
+  }
+  // Too big for one read: a seek to its last megabyte, through the shell (scripts/tail.ps1).
+  const run = await $.process.run(
+    ['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/tail.ps1`],
+    { env: { AW_PATH: path, AW_BYTES: String(1024 * 1024), ...(withFirst ? { AW_FIRST: '1' } : {}) }, timeoutMs: 15_000 },
+  )
+  const all = run.stdout.trimEnd().split(/\r?\n/)
+  return withFirst ? [all[0] ?? '', ...all.slice(1).slice(-lines)] : all.slice(-lines)
+}
+
+const timeOf = (iso?: string) => (iso ? new Date(iso).toTimeString().slice(0, 5) : undefined)
+
+/** A session's last exchange: the person's last message, Claude's last words, its last tools. */
+function readConversation(lines: string[]): Omit<SessionConvo, 'sessionId' | 'isLoading'> {
+  let prompt: string | undefined
+  let promptAt: string | undefined
+  let answer: string | undefined
+  let answerAt: string | undefined
+  const tools: SessionConvo['tools'] = []
+  for (const line of lines) {
+    let entry: Entry & { isMeta?: boolean; isSidechain?: boolean }
+    try {
+      entry = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (entry.isSidechain) continue
+    if (entry.type === 'user' && !entry.isMeta) {
+      const text = textOf(entry.message?.content).trim()
+      // Hook and command output arrives as user rows too, wrapped in tags.
+      if (text && !text.startsWith('<')) {
+        prompt = text
+        promptAt = timeOf(entry.timestamp)
+      }
+    }
+    if (entry.type === 'assistant' && Array.isArray(entry.message?.content)) {
+      for (const block of entry.message.content as { type?: string; name?: string; input?: Record<string, unknown> }[]) {
+        if (block?.type === 'tool_use' && block.name) {
+          const full = describeTool({ tool: block.name, ...(block.input ?? {}) })
+          tools.push({ name: block.name, detail: full.slice(block.name.length + 3), at: timeOf(entry.timestamp) })
+        }
+      }
+      const said = textOf(entry.message.content).trim()
+      if (said) {
+        answer = said
+        answerAt = timeOf(entry.timestamp)
+      }
+    }
+  }
+  const cut = (s: string | undefined, n: number) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s)
+  return { prompt: cut(prompt, 700), promptAt, answer: cut(answer, 2500), answerAt, tools: tools.slice(-8) }
+}
+
+/** Reads a session's conversation again when its transcript changed, at most every CONVO_MS. */
+async function loadConvo($: EngineInterface, sessionId: string, isForced: boolean) {
+  const card = (await read($, board)).sessions.find(c => c.sessionId === sessionId)
+  if (!card) return
+  const path = `${home}/.claude/projects/${projectDir(card.cwd)}/${sessionId}.jsonl`
+  const now = await $.clock.now()
+  try {
+    const stat = await $.fs.stat(path)
+    const isSame = convoRead.path === path && convoRead.mtimeMs === stat.mtimeMs
+    if (!isForced && (isSame || now - convoRead.at < CONVO_MS)) return
+    convoRead = { path, mtimeMs: stat.mtimeMs, at: now }
+    if (isForced) await update($, convo, () => ({ sessionId, isLoading: true, tools: [] }))
+    const found = readConversation(await tailOf($, path, stat.size, 400))
+    await update($, convo, () => ({ sessionId, isLoading: false, ...found }))
+  } catch (err) {
+    await update($, convo, () => ({ sessionId, isLoading: false, tools: [], error: String(err) }))
+  }
+}
+
+/** A notification of the system's own, with its sound; a click opens the session. */
+async function notifySystem($: EngineInterface, title: string, body: string, hostId?: string) {
+  const link = hostId ? sessionLink(hostId) : ''
+  if ((await $.env.get('OS')) === 'Windows_NT') {
+    await $.process
+      .run(['powershell', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', `${$.plugin.root}/scripts/notify.ps1`], {
+        env: { AW_TITLE: title, AW_BODY: body, AW_LINK: link },
+        timeoutMs: 15_000,
+      })
+      .catch(() => {})
+  } else if ((await $.env.get('XDG_CURRENT_DESKTOP')) !== undefined) {
+    await $.process.run(['notify-send', '-a', 'Agent Watch', title, body], { timeoutMs: 5_000 }).catch(() => {})
+  } else {
+    await $.process
+      .run(['osascript', '-e', 'on run argv', '-e', 'display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"', '-e', 'end run', title, body], {
+        timeoutMs: 5_000,
+      })
+      .catch(() => {})
   }
 }
 
@@ -389,6 +491,8 @@ async function openInApp($: EngineInterface, hostId: string) {
 async function tick($: EngineInterface) {
   await writeOwn($).catch(err => $.ui.log(`agent-watch: could not write: ${err}`, { to: 'debug' }))
   await readAll($).catch(err => $.ui.log(`agent-watch: could not read: ${err}`, { to: 'debug' }))
+  const at = await read($, route)
+  if (at.view === 'session') await loadConvo($, at.sessionId, false).catch(() => {})
 }
 
 export const register: Register = (on, options) => {
@@ -508,6 +612,7 @@ export const register: Register = (on, options) => {
       collapsed: await read($, collapsed),
       route: await read($, route),
       detail: await read($, detail),
+      convo: await read($, convo),
       mine: sessionId,
       home,
       width,
@@ -527,6 +632,7 @@ export const register: Register = (on, options) => {
       go: (to: Route) => {
         void update($, route, () => to)
         if (to.view === 'agent') void loadDetail($, to.sessionId, to.agentId)
+        if (to.view === 'session') void loadConvo($, to.sessionId, true)
       },
       openSession: (hostId: string) => void openInApp($, hostId),
       refresh: () => void tick($),

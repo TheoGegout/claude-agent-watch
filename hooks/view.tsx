@@ -1,9 +1,9 @@
 import type { Elements, RenderElement } from 'claude-code'
 
-import type { AgentCard, AgentDetail, Filter, LoopState, Route, SessionCard } from '../types'
+import type { AgentCard, AgentDetail, Filter, LoopState, Route, SessionCard, SessionConvo } from '../types'
 import type { Strings } from './strings'
 
-export type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Link'>
+export type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Link' | 'Markdown'>
 
 /** What the pane draws from, gathered by the render hook. */
 export type ViewModel = {
@@ -13,6 +13,7 @@ export type ViewModel = {
   collapsed: string[]
   route: Route
   detail: AgentDetail | null
+  convo: SessionConvo | null
   mine: string
   home: string
   width: number
@@ -97,7 +98,7 @@ const prettyPath = (path: string, home: string) => {
 export const sessionLink = (hostId: string) => `claude://code/continue?session=${encodeURIComponent(hostId)}`
 
 export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
-  const { Box, Text, Button, Link } = el
+  const { Box, Text, Button, Link, Markdown } = el
   const { t, now } = vm
   const P: Palette = THEME
   const isWide = vm.width >= WIDE
@@ -325,6 +326,59 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         </Text>
       </Box>
     ) : null
+  const conversation = (c: SessionCard) => {
+    const v = vm.convo && vm.convo.sessionId === c.sessionId ? vm.convo : null
+    const who = (name: string, at?: string, color?: string) => (
+      <Text>
+        <Text bold color={color}>
+          {name}
+        </Text>
+        <Text color={P.faint}>{at ? `  ${at}` : ''}</Text>
+      </Text>
+    )
+    return (
+      <Box key="convo" flexDirection="column" marginBottom={1}>
+        {label(t.conversation)}
+        {!v || (v.isLoading && !v.prompt && !v.answer) ? (
+          <Text color={P.dim}>{t.readingConvo}</Text>
+        ) : v.error ? (
+          <Text color={P.faint}>{t.noConvo}</Text>
+        ) : (
+          <Box flexDirection="column">
+            {v.prompt ? (
+              <Box key="you" flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1} marginBottom={1}>
+                {who(t.you, v.promptAt, P.accent)}
+                <Text color={P.text}>{v.prompt}</Text>
+              </Box>
+            ) : null}
+            {v.answer ? (
+              <Box key="claude" flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1} marginBottom={1}>
+                {who(t.claude, v.answerAt, P.running)}
+                <Markdown key="answer" text={v.answer} />
+              </Box>
+            ) : null}
+            {!v.prompt && !v.answer ? <Text color={P.faint}>{t.noConvo}</Text> : null}
+            {v.tools.length > 0 ? (
+              <Box key="tools" flexDirection="column">
+                {label(t.recentTools)}
+                {v.tools.map((tool, i) => (
+                  <Text key={`ct-${i}`} wrap="truncate-end">
+                    <Text color={P.faint}>{tool.at ? `${tool.at}  ` : ''}</Text>
+                    <Text color={P.running}>▸ </Text>
+                    <Text bold color={P.text}>
+                      {tool.name}
+                    </Text>
+                    <Text color={P.dim}>{tool.detail ? `  ${tool.detail}` : ''}</Text>
+                  </Text>
+                ))}
+              </Box>
+            ) : null}
+          </Box>
+        )}
+      </Box>
+    )
+  }
+
   const sessionPage = (c: SessionCard) => {
     const state = liveState(c)
     return (
@@ -357,6 +411,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             </Box>
           </Box>,
         )}
+        {conversation(c)}
         {label(t.agentsTitle(c.agents.length))}
         {c.agents.length === 0 ? (
           <Text color={P.faint}>{t.noAgents}</Text>

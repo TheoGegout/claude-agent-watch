@@ -82,7 +82,9 @@ Mods are an early-access Claude Code feature and their API can change between re
 | `●` grey, `IDLE` | **idle** | the turn is over, the session waits for your next message |
 | `●` red, `ENDED` | **ended** | the subagent finished (kept 10 minutes), or the session closed |
 
-A subagent quiet on a long tool call shows `quiet for 2m 10s` rather than vanishing. The status line counts every running and waiting loop across sessions (`agents ▶ 3 running · ◆ 1 waiting`), and a notification pops when **another** session starts waiting for you.
+A subagent quiet on a long tool call shows `quiet for 2m 10s` rather than vanishing. The status line counts every running and waiting loop across sessions (`agents ▶ 3 running · ◆ 1 waiting`). When **another** session starts waiting for you, a notification shows in Claude Code and as a system notification with its sound; on Windows, clicking it opens that session.
+
+A session's page shows its conversation: your last message, Claude's last words, and its last tool calls, read from the end of its transcript and kept current while the page is open.
 
 ## Use
 
@@ -103,7 +105,7 @@ Focus the pane with `ctrl+x tab` (or click it), then:
 | `s` | status line on / off |
 | `esc` | close |
 
-The pane refreshes every 3 seconds.
+The pane refreshes every second.
 
 ## Where the data comes from
 
@@ -117,7 +119,13 @@ The mod only needs to be installed; the other sessions do not need it.
 
 Each session that loads the mod writes one small file to `~/.claude/agent-watch/<session-id>.json`: its state, its current tool (a name plus a short path or description) and its subagents' names. Nothing else is written, nothing leaves your machine, and it makes no network requests and calls no model.
 
-It runs a process in two cases only, both when you click: **Open ↗** hands the app's `claude://code/continue?session=…` link to the system (`rundll32 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` on Linux); and a subagent's page reads the first and last lines of a transcript over 4 MiB with PowerShell's `Get-Content`. `claude plugin validate .` prints exactly what it hooks and calls.
+It runs a process in these cases only:
+
+- **Open ↗** hands the app's `claude://code/continue?session=…` link to the system (`rundll32 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` on Linux).
+- A session's or a subagent's page, for a transcript over 4 MiB (more than one read of a mod holds), reads its last megabyte with `scripts/tail.ps1`, a seek to the end of the file.
+- A system notification when another session starts waiting: `scripts/notify.ps1` on Windows, `osascript` on macOS, `notify-send` on Linux.
+
+`claude plugin validate .` prints exactly what it hooks and calls.
 
 **What is inferred, not measured.** The session registry and the subagent transcripts are Claude Code internals, not a public API: a Claude Code update can change them, and the pane would then show less until the mod is updated. A subagent counts as running while it writes to its transcript, and is classified from its transcript's last entries once quiet for 30 seconds; a transcript over 4 MiB cannot be read by a mod, so it is judged by when it was last written.
 

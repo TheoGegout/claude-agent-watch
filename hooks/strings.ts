@@ -64,6 +64,13 @@ export type Strings = {
   nothingYet: string
   unreadable: string
   hint: string
+  conversation: string
+  you: string
+  claude: string
+  recentTools: string
+  readingConvo: string
+  noConvo: string
+  notifyTitle: string
 }
 
 export const STRINGS: Record<'en' | 'fr', Strings> = {
@@ -130,6 +137,13 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     nothingYet: 'Nothing yet.',
     unreadable: 'Its transcript could not be read.',
     hint: 'Click a session for its details, an agent for its activity.',
+    conversation: 'CONVERSATION',
+    you: 'You',
+    claude: 'Claude',
+    recentTools: 'RECENT TOOL CALLS',
+    readingConvo: 'Reading the conversation…',
+    noConvo: 'No conversation yet.',
+    notifyTitle: 'A Claude session is waiting for you',
   },
   fr: {
     state: { running: 'en cours', waiting: 'attend ta réponse', idle: 'inactif', ended: 'terminé' },
@@ -194,5 +208,12 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     nothingYet: 'Rien pour l’instant.',
     unreadable: 'Impossible de lire son transcript.',
     hint: 'Clique une session pour ses détails, un agent pour son activité.',
+    conversation: 'CONVERSATION',
+    you: 'Toi',
+    claude: 'Claude',
+    recentTools: 'DERNIERS OUTILS',
+    readingConvo: 'Lecture de la conversation…',
+    noConvo: 'Pas encore de conversation.',
+    notifyTitle: 'Une session Claude attend ta réponse',
   },
 }

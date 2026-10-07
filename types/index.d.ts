@@ -54,6 +54,21 @@ export type AgentDetail = {
   error?: string
 }
 
+/** A session's conversation, read from the end of its transcript. */
+export type SessionConvo = {
+  sessionId: string
+  isLoading: boolean
+  /** The person's last message, and when. */
+  prompt?: string
+  promptAt?: string
+  /** Claude's last words, and when. */
+  answer?: string
+  answerAt?: string
+  /** Its last tool calls, newest last. */
+  tools: { name: string; detail: string; at?: string }[]
+  error?: string
+}
+
 /** This session's own loop, kept across reloads. */
 export type SelfStatus = {
   title: string
@@ -77,6 +92,7 @@ declare module 'claude-code' {
       collapsed: string[]
       route: Route
       detail: AgentDetail | null
+      convo: SessionConvo | null
     }
   }
 }
