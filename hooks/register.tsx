@@ -427,6 +427,11 @@ async function ensureDashboard($: EngineInterface) {
 }
 
 async function tick($: EngineInterface) {
+  // The pane open, however it was (the command, a pane kept across a reload): serve the dashboard.
+  if (!wantsDashboard) {
+    const panes = await $.ui.panes().catch(() => [])
+    wantsDashboard = panes.some(pane => pane.id === PANE)
+  }
   await writeOwn($).catch(err => $.ui.log(`agent-watch: could not write: ${err}`, { to: 'debug' }))
   await readAll($).catch(err => $.ui.log(`agent-watch: could not read: ${err}`, { to: 'debug' }))
   if (wantsDashboard && !isDashboardUp) await ensureDashboard($).catch(() => {})
