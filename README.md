@@ -90,6 +90,12 @@ A subagent quiet on a long tool call shows `quiet for 2m 10s` rather than vanish
 | --- | --- |
 | `/agent-watch` | open the pane |
 
+### The full dashboard
+
+Opening the pane also starts a small local web server (`server/dashboard.mjs`, Node 18 or newer, no dependencies) and adds **Full dashboard ↗** to the pane's header: `http://localhost:47311`. It shows the same board as a full page, every part of it clickable: filter by state, open a session's page, open a subagent's page (its task, its last 20 tool calls with their time, its last words, read from its transcript), and **Open in Claude ↗** to bring that session up in the desktop app. `Esc` or `b` goes back, `1`–`5` filter, `r` refreshes, `l` switches language.
+
+The server listens on `127.0.0.1` only, answers only requests addressed to `localhost` or `127.0.0.1` (so a web page elsewhere cannot reach it through DNS rebinding), and stops by itself after 30 minutes without a request, or with the session that started it. One machine runs one: a second session finds the port taken and leaves it be.
+
 Focus the pane with `ctrl+x tab` (or click it), then:
 
 | Key | Does |
@@ -117,7 +123,7 @@ The mod only needs to be installed; the other sessions do not need it.
 
 Each session that loads the mod writes one small file to `~/.claude/agent-watch/<session-id>.json`: its state, its current tool (a name plus a short path or description) and its subagents' names. Nothing else is written, nothing leaves your machine, and it makes no network requests and calls no model.
 
-It runs a process in two cases only, both when you click: **Open ↗** hands the app's `claude://code/continue?session=…` link to the system (`rundll32 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` on Linux), and a subagent's page reads the first and last lines of a transcript over 4 MiB with PowerShell's `Get-Content`. `claude plugin validate .` prints exactly what it hooks and calls.
+It runs processes in three cases: opening the pane starts the dashboard's server with `node` (see above); **Open ↗** hands the app's `claude://code/continue?session=…` link to the system (`rundll32 url.dll,FileProtocolHandler` on Windows, `open` on macOS, `xdg-open` on Linux); and a subagent's page in the pane reads the first and last lines of a transcript over 4 MiB with PowerShell's `Get-Content`. While the pane has been opened, the mod also writes `~/.claude/agent-watch/_board.json`, the board the dashboard reads. `claude plugin validate .` prints exactly what it hooks and calls.
 
 **What is inferred, not measured.** The session registry and the subagent transcripts are Claude Code internals, not a public API: a Claude Code update can change them, and the pane would then show less until the mod is updated. A subagent counts as running while it writes to its transcript, and is classified from its transcript's last entries once quiet for 30 seconds; a transcript over 4 MiB cannot be read by a mod, so it is judged by when it was last written.
 

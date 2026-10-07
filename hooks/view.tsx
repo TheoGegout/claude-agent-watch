@@ -17,6 +17,8 @@ export type ViewModel = {
   home: string
   width: number
   isTerminal: boolean
+  /** The full dashboard's address, once its server answers. */
+  dashboardUrl?: string
   t: Strings
   version: string
   notify: boolean
@@ -41,20 +43,7 @@ const SIDEBAR = 30
 // The pane is wide enough for the sidebar beside the cards from here.
 const WIDE = 100
 
-/** The desktop's own palette, the dashboard's; the terminal keeps its theme. */
-const HEX = {
-  running: '#3fb950',
-  waiting: '#f0a020',
-  idle: '#8c94a3',
-  ended: '#f85149',
-  accent: '#d97757',
-  text: '#e6e9ef',
-  dim: '#8c94a3',
-  faint: '#5d6574',
-  line: '#2a303c',
-  card: '#151a23',
-  panel: '#11151c',
-}
+/** Colours by the app's theme keys, so the pane reads as part of it. */
 const THEME = {
   running: 'success',
   waiting: 'warning',
@@ -68,7 +57,7 @@ const THEME = {
   card: undefined,
   panel: undefined,
 }
-type Palette = Record<keyof typeof HEX, string | undefined>
+type Palette = Record<keyof typeof THEME, string | undefined>
 
 export const agentState = (status: string, waiting?: string): LoopState => {
   if (waiting) return 'waiting'
@@ -112,7 +101,7 @@ export const sessionLink = (hostId: string) => `claude://code/continue?session=$
 export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   const { Box, Text, Button, Link } = el
   const { t, now } = vm
-  const P: Palette = vm.isTerminal ? THEME : HEX
+  const P: Palette = THEME
   const isWide = vm.width >= WIDE
   const main = isWide ? vm.width - SIDEBAR - 3 : vm.width
 
@@ -134,8 +123,8 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         {` ${label} `}
       </Text>
     ) : (
-      <Text color={P[state]} backgroundColor={`${HEX[state]}26`} bold>
-        {` ${label} `}
+      <Text color={P[state]} bold>
+        {label}
       </Text>
     )
   const dot = (state: LoopState) => <Text color={P[state]}>● </Text>
@@ -144,7 +133,8 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       {text}
     </Text>
   )
-  const rule = () => <Text color={P.line}>{'─'.repeat(Math.max(0, Math.min(vm.width, 400)))}</Text>
+  // A rule of box-drawing dashes reads only where a cell is a glyph wide: the terminal.
+  const rule = () => (vm.isTerminal ? <Text color={P.line}>{'─'.repeat(Math.max(0, Math.min(vm.width, 400)))}</Text> : null)
   const openLink = (c: SessionCard, text: string) => {
     const hostId = c.hostId
     return hostId ? (
@@ -157,7 +147,6 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       flexDirection="column"
       borderStyle="round"
       borderColor={isAlert ? P.waiting : P.line}
-      backgroundColor={P.card}
       paddingX={1}
       marginBottom={1}
     >
@@ -190,6 +179,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             />
           ))}
           <Button key="refresh-top" plain label={`⟳ ${t.autoRefresh} 3s`} dimColor onPress={act.refresh} />
+          {vm.dashboardUrl ? <Link href={vm.dashboardUrl} label={t.dashboard} /> : null}
         </Box>
       </Box>
       {rule()}
@@ -230,7 +220,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
 
   const statusBlock = (c: SessionCard) =>
     c.state === 'waiting' ? (
-      <Box borderStyle="round" borderColor={P.waiting} backgroundColor={vm.isTerminal ? undefined : `${HEX.waiting}14`} paddingX={1} flexDirection="column">
+      <Box borderStyle="round" borderColor={P.waiting} paddingX={1} flexDirection="column">
         <Text color={P.waiting} bold wrap="truncate-end">
           {`⚠ ${t.inputRequired}`}
         </Text>
@@ -269,7 +259,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             <Button
               plain
               key={`session-${c.sessionId}`}
-              label={short(c.title || t.newSession, Math.max(16, main - 40))}
+              label={short(c.title || t.newSession, Math.max(28, main - 24))}
               onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
             />
             {isMine ? <Text color={P.dim}>{t.here.trim()}</Text> : null}
@@ -303,7 +293,6 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             marginTop={1}
             borderStyle="round"
             borderColor={P.line}
-            backgroundColor={P.panel}
             paddingX={1}
           >
             {c.agents.map(a => agentRow(c, a))}
@@ -375,7 +364,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         {c.agents.length === 0 ? (
           <Text color={P.faint}>{t.noAgents}</Text>
         ) : (
-          <Box flexDirection="column" borderStyle="round" borderColor={P.line} backgroundColor={P.panel} paddingX={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1}>
             {c.agents.map(a => agentRow(c, a))}
           </Box>
         )}
@@ -426,7 +415,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
               </Box>
             ) : null}
             {label(t.lastTools)}
-            <Box flexDirection="column" borderStyle="round" borderColor={P.line} backgroundColor={P.panel} paddingX={1} marginBottom={1}>
+            <Box flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1} marginBottom={1}>
               {d.tools.length === 0 ? (
                 <Text color={P.faint}>{t.nothingYet}</Text>
               ) : (
@@ -512,7 +501,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         <Text color={P.dim}>{`b    ${t.back.replace('← ', '')}`}</Text>
         <Text color={P.dim}>{`esc  ${t.closeKeys}`}</Text>
       </Box>
-      <Box flexDirection="column" borderStyle="round" borderColor={P.line} backgroundColor={P.card} paddingX={1}>
+      <Box flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1}>
         <Text bold color={P.text}>
           ⓘ Agent Watch
         </Text>
@@ -565,7 +554,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   )
 
   return (
-    <Box flexDirection="column" width={vm.width} backgroundColor={vm.isTerminal ? undefined : '#0e1117'} paddingX={vm.isTerminal ? 0 : 1}>
+    <Box flexDirection="column" width={vm.width}>
       {header}
       {isWide ? (
         <Box key="body" columnGap={3} marginTop={1}>

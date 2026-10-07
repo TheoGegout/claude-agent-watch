@@ -64,6 +64,8 @@ export type Strings = {
   nothingYet: string
   unreadable: string
   hint: string
+  dashboard: string
+  needsNode: string
 }
 
 export const STRINGS: Record<'en' | 'fr', Strings> = {
@@ -130,6 +132,8 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     nothingYet: 'Nothing yet.',
     unreadable: 'Its transcript could not be read.',
     hint: 'Click a session for its details, an agent for its activity.',
+    dashboard: 'Full dashboard ↗',
+    needsNode: 'agent-watch: the full dashboard needs Node.js on this machine',
   },
   fr: {
     state: { running: 'en cours', waiting: 'attend ta réponse', idle: 'inactif', ended: 'terminé' },
@@ -194,5 +198,7 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     nothingYet: 'Rien pour l’instant.',
     unreadable: 'Impossible de lire son transcript.',
     hint: 'Clique une session pour ses détails, un agent pour son activité.',
+    dashboard: 'Dashboard complet ↗',
+    needsNode: 'agent-watch : le dashboard complet demande Node.js sur cette machine',
   },
 }
