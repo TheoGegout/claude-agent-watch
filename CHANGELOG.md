@@ -9,6 +9,8 @@ The pane as a session list, [herdr](https://github.com/herdrdev/herdr)'s way.
 - The selected session's page on the right: its state, its conversation, its subagents. `j` / `k` move the selection, `o` opens it in the app, `b` goes back. Narrow panes show the list alone and open a session in its place.
 - The pane opens by itself when a session starts (`openOnStart`, on by default), so it can stand in for the app's own list.
 - Settings and keys live in the footer; the header's counts filter the list.
+- Projects numbered `1`–`9` (the key jumps to it), each with its git branch; one-word states (`blocked`, `working`, `done`, `idle`) and a spinner while a session or subagent works; an `agents` section gathers every subagent at work across sessions.
+- The selected session reads like its own terminal: `❯` your message, `⏺ Tool(detail)` its calls (the live one spinning), Claude's answer, `Working…` with its time while it runs, a permission box while it waits, and a status line with folder, branch, model and context size.
 
 ## 0.2.0 — 2026-10-07
 

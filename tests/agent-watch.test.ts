@@ -187,7 +187,7 @@ test('sessions without the mod show from the registry, with their subagents', as
     await ui.press({ key: 'session-other' })
     expect(await ui.find({ text: /SUBAGENTS · 3/ })).toBeDefined()
     expect(await ui.find({ text: /Open in the app/ })).toBeDefined()
-    expect(await ui.find({ text: /CONVERSATION/ })).toBeDefined()
+    expect(await ui.find({ text: /^❯ $/ })).toBeDefined()
     expect(await ui.find({ text: /Add the coupon field to checkout/ })).toBeDefined()
     expect(await ui.find({ text: /a reminder the person never typed/ })).toBeUndefined()
     expect(await ui.find({ type: 'Markdown' })).toBeDefined()
@@ -278,9 +278,9 @@ test('a narrow pane drops the sidebar for a filter row', async ($, on) => {
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...(PANE.props as object), bodyColumns: 60 } as never })
   expect(await ui.find({ text: /Narrow/ })).toBeDefined()
   // Narrow: the list alone; a session's page opens in its place.
-  expect(await ui.find({ text: /CONVERSATION/ })).toBeUndefined()
+  expect(await ui.find({ text: /^D:\/x$/ })).toBeUndefined()
   await ui.press({ key: 'session-other' })
-  expect(await ui.find({ text: /CONVERSATION/ })).toBeDefined()
+  expect(await ui.find({ text: /^D:\/x$/ })).toBeDefined()
   await ui.press({ key: 'back' })
   expect(await ui.find({ key: 'session-other' })).toBeDefined()
 })
@@ -336,16 +336,33 @@ test('a session that finished since you last looked reads as done, until you ope
 
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ text: /^● $/ })).toBeDefined()
+  expect(await ui.find({ text: /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] $/ })).toBeDefined()
 
   // It finishes while you look elsewhere.
   await clock.advance(10_000)
   w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:\\Dev\\webshop', name: 'Checkout flow', status: 'idle', statusUpdatedAt: NOW + 10_000 })
   await ui.press({ key: 'refresh' })
   expect(await ui.find({ text: /^✓ $/ })).toBeDefined()
-  expect(await ui.find({ text: /^DONE$/ })).toBeDefined()
+  expect(await ui.find({ text: /^done$/ })).toBeDefined()
 
   // Opening it is looking at it.
   await ui.press({ key: 'session-other' })
   expect(await ui.find({ text: /^✓ $/ })).toBeUndefined()
+})
+
+test('herdr touches: the branch, the model and the context, numbered projects', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, clock.now)
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:\\Dev\\webshop', name: 'Checkout flow', status: 'busy' })
+  w.put('D:/Dev/webshop/.git/HEAD', 'ref: refs/heads/feature/coupons\n')
+  w.put(
+    `${HOME}/.claude/projects/D--Dev-webshop/other.jsonl`,
+    JSON.stringify({ type: 'assistant', message: { model: 'claude-opus-5-5', usage: { input_tokens: 3000, cache_read_input_tokens: 49_000, cache_creation_input_tokens: 0, output_tokens: 10 }, content: [{ type: 'text', text: 'ok' }] } }),
+  )
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /⎇ feature\/coupons/ })).toBeDefined()
+  await ui.press({ key: 'project-1' })
+  expect(await ui.find({ text: /opus-5-5  ·  ctx 52k/ })).toBeDefined()
 })

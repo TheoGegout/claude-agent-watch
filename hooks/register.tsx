@@ -71,6 +71,8 @@ let home = ''
 let sessionId = ''
 let cwd = ''
 let wasWaiting = new Set<string>()
+// The git branch of each folder, read again after a while.
+const branchCache = new Map<string, { at: number; branch?: string }>()
 // Which transcript the conversation was last read from, at what modification, when.
 let convoRead = { path: '', mtimeMs: 0, at: 0 }
 
@@ -256,6 +258,27 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
   return agents.sort((a, b) => Number(a.status !== 'running') - Number(b.status !== 'running'))
 }
 
+/** The branch a folder's repository is on: its own `.git/HEAD`, or a parent's. */
+async function branchOf($: EngineInterface, cwd: string, now: number): Promise<string | undefined> {
+  const cached = branchCache.get(cwd)
+  if (cached && now - cached.at < 15_000) return cached.branch
+  let branch: string | undefined
+  let dir = cwd.replace(/\\/g, '/').replace(/\/$/, '')
+  for (let depth = 0; depth < 6 && dir; depth += 1) {
+    const head = await $.fs.read(`${dir}/.git/HEAD`).catch(() => undefined)
+    if (head !== undefined) {
+      const ref = head.trim().match(/^ref: refs\/heads\/(.+)$/)
+      branch = ref ? ref[1] : head.trim().slice(0, 7)
+      break
+    }
+    const cut = dir.lastIndexOf('/')
+    if (cut <= 0) break
+    dir = dir.slice(0, cut)
+  }
+  branchCache.set(cwd, { at: now, branch })
+  return branch
+}
+
 async function readAll($: EngineInterface) {
   if (!folder) return
   const now = await $.clock.now()
@@ -310,6 +333,7 @@ async function readAll($: EngineInterface) {
     sessions.push({
       sessionId: reg.sessionId,
       hostId: reg.hostSessionId,
+      branch: await branchOf($, reg.cwd, now),
       startedAt: reg.startedAt,
       cwd: reg.cwd,
       title: reg.name || report?.title || '',
@@ -455,8 +479,10 @@ function readConversation(lines: string[]): Omit<SessionConvo, 'sessionId' | 'is
   let answer: string | undefined
   let answerAt: string | undefined
   const tools: SessionConvo['tools'] = []
+  let ctx: number | undefined
+  let model: string | undefined
   for (const line of lines) {
-    let entry: Entry & { isMeta?: boolean; isSidechain?: boolean }
+    let entry: Entry & { isMeta?: boolean; isSidechain?: boolean; message?: { model?: string; usage?: Usage } }
     try {
       entry = JSON.parse(line)
     } catch {
@@ -470,6 +496,11 @@ function readConversation(lines: string[]): Omit<SessionConvo, 'sessionId' | 'is
         prompt = text
         promptAt = timeOf(entry.timestamp)
       }
+    }
+    if (entry.type === 'assistant' && entry.message?.usage) {
+      const u = entry.message.usage
+      ctx = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0)
+      if (entry.message.model && !entry.message.model.startsWith('<')) model = entry.message.model
     }
     if (entry.type === 'assistant' && Array.isArray(entry.message?.content)) {
       for (const block of entry.message.content as { type?: string; name?: string; input?: Record<string, unknown> }[]) {
@@ -486,7 +517,7 @@ function readConversation(lines: string[]): Omit<SessionConvo, 'sessionId' | 'is
     }
   }
   const cut = (s: string | undefined, n: number) => (s && s.length > n ? `${s.slice(0, n - 1)}…` : s)
-  return { prompt: cut(prompt, 700), promptAt, answer: cut(answer, 2500), answerAt, tools: tools.slice(-8) }
+  return { prompt: cut(prompt, 700), promptAt, answer: cut(answer, 2500), answerAt, tools: tools.slice(-8), ctx, model }
 }
 
 /** Reads a session's conversation again when its transcript changed, at most every CONVO_MS. */

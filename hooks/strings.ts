@@ -76,6 +76,9 @@ export type Strings = {
   tokensCtx: (n: string) => string
   textHeader: (running: number, waiting: number, idle: number) => string
   done: string
+  word: { blocked: string; working: string; done: string; idle: string; ended: string }
+  agentsHeader: string
+  working: string
   sessionsTitle: string
   keys: string
   next: string
@@ -159,6 +162,9 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     tokensCtx: n => `ctx ${n}`,
     textHeader: (r, w, i) => `Agent Watch — ${r} running · ${w} waiting · ${i} idle`,
     done: 'DONE',
+    word: { blocked: 'blocked', working: 'working', done: 'done', idle: 'idle', ended: 'ended' },
+    agentsHeader: 'agents',
+    working: 'Working…',
     sessionsTitle: 'SESSIONS',
     keys: 'click or j/k to move · o open in the app · b back',
     next: 'j ↓',
@@ -240,6 +246,9 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     tokensCtx: n => `ctx ${n}`,
     textHeader: (r, w, i) => `Agent Watch — ${r} en cours · ${w} en attente · ${i} inactifs`,
     done: 'FINI',
+    word: { blocked: 'bloquée', working: 'en cours', done: 'finie', idle: 'inactive', ended: 'terminée' },
+    agentsHeader: 'agents',
+    working: 'Au travail…',
     sessionsTitle: 'SESSIONS',
     keys: 'clic ou j/k pour naviguer · o ouvrir dans l’app · b retour',
     next: 'j ↓',

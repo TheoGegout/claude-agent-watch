@@ -127,6 +127,10 @@ const prettyPath = (path: string, home: string) => {
 }
 
 /** The deep link the desktop app answers by opening that session. */
+const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+/** The working mark: a spinner that turns with the board's one-second refresh. */
+export const spinner = (now: number) => SPIN[Math.floor(now / 1000) % SPIN.length]!
+
 export const sessionLink = (hostId: string) => `claude://code/continue?session=${encodeURIComponent(hostId)}`
 
 export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
@@ -288,100 +292,110 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         </Text>
       </Box>
     ) : null
-  const conversation = (c: SessionCard) => {
+  const terminal = (c: SessionCard) => {
     const v = vm.convo && vm.convo.sessionId === c.sessionId ? vm.convo : null
-    const who = (name: string, at?: string, color?: string) => (
-      <Text>
-        <Text bold color={color}>
-          {name}
-        </Text>
-        <Text color={P.faint}>{at ? `  ${at}` : ''}</Text>
-      </Text>
-    )
+    const state = c.state
+    const lastTool = v?.tools.at(-1)
     return (
-      <Box key="convo" flexDirection="column" marginBottom={1}>
-        {label(t.conversation)}
-        {!v || (v.isLoading && !v.prompt && !v.answer) ? (
+      <Box
+        key="terminal"
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={state === 'waiting' ? P.waiting : P.line}
+        paddingX={1}
+        marginBottom={1}
+      >
+        {!v || (v.isLoading && !v.prompt && !v.answer && v.tools.length === 0) ? (
           <Text color={P.dim}>{t.readingConvo}</Text>
-        ) : v.error ? (
+        ) : v.error || (!v.prompt && !v.answer && v.tools.length === 0) ? (
           <Text color={P.faint}>{t.noConvo}</Text>
         ) : (
           <Box flexDirection="column">
             {v.prompt ? (
-              <Box key="you" flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1} marginBottom={1}>
-                {who(t.you, v.promptAt, P.accent)}
+              <Text key="prompt" wrap="wrap">
+                <Text color={P.accent} bold>
+                  {'❯ '}
+                </Text>
                 <Text color={P.text}>{v.prompt}</Text>
+                <Text color={P.faint}>{v.promptAt ? `   ${v.promptAt}` : ''}</Text>
+              </Text>
+            ) : null}
+            {v.tools.length > 0 ? (
+              <Box key="tools" flexDirection="column" marginTop={1}>
+                {v.tools.map((tool, i) => {
+                  const isLive = state === 'running' && tool === lastTool
+                  return (
+                    <Text key={`ct-${i}`} wrap="truncate-end">
+                      <Text color={isLive ? P.waiting : P.running}>{isLive ? `${spinner(now)} ` : '⏺ '}</Text>
+                      <Text bold color={P.text}>
+                        {tool.name}
+                      </Text>
+                      <Text color={P.dim}>{tool.detail ? `(${tool.detail})` : ''}</Text>
+                    </Text>
+                  )
+                })}
               </Box>
             ) : null}
             {v.answer ? (
-              <Box key="claude" flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1} marginBottom={1}>
-                {who(t.claude, v.answerAt, P.running)}
+              <Box key="answer" flexDirection="column" marginTop={1}>
                 <Markdown key="answer" text={v.answer} />
-              </Box>
-            ) : null}
-            {!v.prompt && !v.answer ? <Text color={P.faint}>{t.noConvo}</Text> : null}
-            {v.tools.length > 0 ? (
-              <Box key="tools" flexDirection="column">
-                {label(t.recentTools)}
-                {v.tools.map((tool, i) => (
-                  <Text key={`ct-${i}`} wrap="truncate-end">
-                    <Text color={P.faint}>{tool.at ? `${tool.at}  ` : ''}</Text>
-                    <Text color={P.running}>▸ </Text>
-                    <Text bold color={P.text}>
-                      {tool.name}
-                    </Text>
-                    <Text color={P.dim}>{tool.detail ? `  ${tool.detail}` : ''}</Text>
-                  </Text>
-                ))}
               </Box>
             ) : null}
           </Box>
         )}
+        {state === 'running' ? (
+          <Text key="working" color={P.accent}>
+            {`${spinner(now)} ${t.working} `}
+            <Text color={P.faint}>{`(${clock(now - (c.toolSince ?? c.since))}${c.tool ? ` · ${c.tool}` : ''})`}</Text>
+          </Text>
+        ) : null}
+        {state === 'waiting' ? (
+          <Box key="ask" flexDirection="column" borderStyle="round" borderColor={P.waiting} paddingX={1} marginTop={1}>
+            <Text color={P.waiting} bold>{`◆ ${t.inputRequired}`}</Text>
+            <Text color={P.dim}>{c.waiting ? `${c.waiting} · ${t.waitingForYourResponse}` : t.waitingForYourResponse}</Text>
+          </Box>
+        ) : null}
+        <Text key="status" color={P.faint} wrap="truncate-end">
+          {[
+            prettyPath(c.cwd, vm.home),
+            c.branch ? `⎇ ${c.branch}` : '',
+            v?.model ? v.model.replace(/^claude-/, '') : '',
+            v?.ctx !== undefined ? `ctx ${count(v.ctx)}` : '',
+          ]
+            .filter(Boolean)
+            .join('  ·  ')}
+        </Text>
       </Box>
     )
   }
 
   const sessionPage = (c: SessionCard) => {
     const state = liveState(c)
+    const word = state === 'waiting' ? t.word.blocked : state === 'running' ? t.word.working : state === 'ended' ? t.word.ended : t.word.idle
     return (
       <Box key="session" flexDirection="column" width={main}>
-        <Box justifyContent={isWide ? 'flex-end' : 'space-between'} marginBottom={1}>
-          {isWide ? null : back({ view: 'list' })}
+        <Box justifyContent="space-between" columnGap={2} marginBottom={1}>
+          <Box flexShrink={1} columnGap={1}>
+            {isWide ? null : back({ view: 'list' })}
+            <Text color={state === 'running' ? P.running : state === 'waiting' ? P.waiting : P.dim}>
+              {state === 'running' ? spinner(now) : state === 'waiting' ? '◆' : '○'}
+            </Text>
+            <Text bold color={P.text} wrap="truncate-end">
+              {c.title || t.newSession}
+            </Text>
+            <Text color={state === 'waiting' ? P.waiting : P.faint}>{`${word} · ${clock(now - c.since)}`}</Text>
+          </Box>
           {openLink(c, t.openInApp)}
         </Box>
-        {card(
-          'session-card',
-          state === 'waiting',
-          <Box flexDirection="column">
-            <Box columnGap={1}>
-              {dot(state)}
-              <Text bold color={P.text} wrap="truncate-end">
-                {c.title || t.newSession}
-              </Text>
-              {badge(state, t.badge[state])}
+        {terminal(c)}
+        {c.agents.length > 0 ? (
+          <Box key="agents" flexDirection="column">
+            {label(t.agentsTitle(c.agents.length))}
+            <Box flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1}>
+              {c.agents.map(a => agentRow(c, a))}
             </Box>
-            <Box flexDirection="column" marginTop={1}>
-              {field(t.folder, prettyPath(c.cwd, vm.home), 'f-folder')}
-              {field(t.stateLabel, t.state[c.state], 'f-state')}
-              {field(t.duration, clock(now - c.since), 'f-since')}
-              {field(t.waitingReason, c.state === 'waiting' ? (c.waiting ?? null) : null, 'f-wait')}
-              {field(t.currentTool, c.state === 'running' ? (c.tool ?? null) : null, 'f-tool')}
-              {field(t.sessionId, c.sessionId, 'f-id')}
-            </Box>
-            <Box marginTop={1} flexDirection="column">
-              {statusBlock(c)}
-            </Box>
-          </Box>,
-        )}
-        {conversation(c)}
-        {label(t.agentsTitle(c.agents.length))}
-        {c.agents.length === 0 ? (
-          <Text color={P.faint}>{t.noAgents}</Text>
-        ) : (
-          <Box flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1}>
-            {c.agents.map(a => agentRow(c, a))}
           </Box>
-        )}
+        ) : null}
       </Box>
     )
   }
@@ -491,78 +505,54 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   }
 
   const listWidth = isWide ? SIDEBAR : vm.width
+  const wordOf = (state: LoopState, isDone: boolean) =>
+    state === 'waiting' ? t.word.blocked : state === 'running' ? t.word.working : isDone ? t.word.done : state === 'ended' ? t.word.ended : t.word.idle
+  const glyphOf = (state: LoopState, isDone: boolean): Mark =>
+    state === 'running' ? { glyph: spinner(now), color: P.running } : markOf(state, isDone)
+
   const sessionRow = (c: SessionCard) => {
-    const mark = sessionMark(c)
+    const state = liveState(c)
+    const isDone = isUnseen(c) || c.agents.some(a => isAgentUnseen(c, a))
+    const mark = glyphOf(state, isDone)
     const isOn = c.sessionId === selectedId
-    const state = c.state
-    const side =
-      state === 'waiting'
-        ? clock(now - c.since)
-        : state === 'running'
-          ? c.toolSince !== undefined
-            ? clock(now - c.toolSince)
-            : clock(now - c.since)
-          : isUnseen(c)
-            ? t.done
-            : clock(now - c.since)
-    const liveAgents = c.agents.filter(a => {
-      const s = agentState(a.status, a.waiting)
-      return s === 'running' || s === 'waiting' || isAgentUnseen(c, a)
-    })
     return (
-      <Box key={`row-${c.sessionId}`} flexDirection="column">
-        <Box justifyContent="space-between" columnGap={1}>
-          <Box flexShrink={1}>
-            <Text color={P.accent}>{isOn ? '▌' : ' '}</Text>
-            <Text color={mark.color}>{`${mark.glyph} `}</Text>
-            <Button
-              plain
-              key={`session-${c.sessionId}`}
-              label={short(`${c.title || t.newSession}${c.sessionId === vm.mine ? t.here : ''}`, Math.max(12, listWidth - 14))}
-              dimColor={!isOn && state !== 'waiting' && state !== 'running' && !isUnseen(c)}
-              onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
-            />
-          </Box>
-          <Text color={state === 'waiting' ? P.waiting : P.faint} wrap="truncate-end">
-            {side}
-          </Text>
+      <Box key={`row-${c.sessionId}`} justifyContent="space-between" columnGap={1}>
+        <Box flexShrink={1}>
+          <Text color={P.accent}>{isOn ? '▌' : ' '}</Text>
+          <Text color={mark.color}>{`${mark.glyph} `}</Text>
+          <Button
+            plain
+            key={`session-${c.sessionId}`}
+            label={short(`${c.title || t.newSession}${c.sessionId === vm.mine ? t.here : ''}`, Math.max(12, listWidth - 16))}
+            dimColor={!isOn && state !== 'waiting' && state !== 'running' && !isDone}
+            onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
+          />
         </Box>
-        {liveAgents.slice(0, 4).map((a, i) => {
-          const s = agentState(a.status, a.waiting)
-          const am = markOf(s, isAgentUnseen(c, a))
-          const branch = i === Math.min(liveAgents.length, 4) - 1 ? '└' : '├'
-          const elapsed =
-            a.startedAt === undefined ? '' : clock((s === 'ended' ? (a.endedAt ?? now) : now) - a.startedAt)
-          return (
-            <Box key={`row-${c.sessionId}-${a.id}`} justifyContent="space-between" columnGap={1}>
-              <Box flexShrink={1}>
-                <Text color={P.faint}>{`   ${branch} `}</Text>
-                <Text color={am.color}>{`${am.glyph} `}</Text>
-                <Button
-                  plain
-                  dimColor
-                  key={`row-agent-${c.sessionId}-${a.id}`}
-                  label={short(a.type, Math.max(8, listWidth - 18))}
-                  onPress={() => act.go({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
-                />
-              </Box>
-              <Text color={P.faint}>{s === 'ended' ? t.done : elapsed}</Text>
-            </Box>
-          )
-        })}
-        {liveAgents.length > 4 ? <Text color={P.faint}>{`     +${liveAgents.length - 4}`}</Text> : null}
+        <Text color={state === 'waiting' ? P.waiting : isDone ? P.accent : P.faint}>{wordOf(state, isDone)}</Text>
       </Box>
     )
   }
-  const projectRollup = (sessions: SessionCard[]) => {
-    const all = sessions.map(sessionMark)
-    return (
-      all.find(m => m.glyph === '◆') ??
-      all.find(m => m.glyph === '●') ??
-      all.find(m => m.glyph === '✓') ??
-      all[0] ?? { glyph: '○', color: P.dim }
-    )
+
+  const projectRollup = (sessions: SessionCard[]): Mark => {
+    const states = sessions.map(c => ({ state: liveState(c), isDone: isUnseen(c) || c.agents.some(a => isAgentUnseen(c, a)) }))
+    const pick =
+      states.find(x => x.state === 'waiting') ??
+      states.find(x => x.state === 'running') ??
+      states.find(x => x.isDone) ??
+      states[0]
+    return pick ? markOf(pick.state, pick.isDone) : { glyph: '○', color: P.dim }
   }
+
+  // Every subagent that is working, waiting, or freshly done, across the listed sessions.
+  const liveAgents = ordered.flatMap(c =>
+    c.agents
+      .filter(a => {
+        const st = agentState(a.status, a.waiting)
+        return st === 'running' || st === 'waiting' || isAgentUnseen(c, a)
+      })
+      .map(a => ({ c, a })),
+  )
+
   const list = (
     <Box key="list" flexDirection="column" width={listWidth} flexShrink={0}>
       {vm.sessions.length === 0 ? (
@@ -570,21 +560,61 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       ) : shown.length === 0 ? (
         <Text color={P.dim}>{t.noMatch}</Text>
       ) : (
-        projects.map(p => {
+        projects.map((p, i) => {
           const roll = projectRollup(p.sessions)
+          const branch = p.sessions.find(c => c.branch)?.branch
           return (
             <Box key={`p-${p.name}`} flexDirection="column" marginBottom={1}>
-              <Box justifyContent="space-between">
-                <Text bold color={P.text} wrap="truncate-end">
-                  {p.name}
-                </Text>
-                <Text color={roll.color}>{roll.glyph}</Text>
+              <Box>
+                {i < 9 ? (
+                  <Button
+                    plain
+                    key={`project-${i + 1}`}
+                    hotkey={String(i + 1)}
+                    label={p.name}
+                    onPress={() => {
+                      const first = p.sessions[0]
+                      if (first) act.go({ view: 'session', sessionId: first.sessionId })
+                    }}
+                  />
+                ) : (
+                  <Text bold color={P.text}>
+                    {p.name}
+                  </Text>
+                )}
+                <Text color={roll.color}>{` ${roll.glyph}`}</Text>
               </Box>
+              {branch ? <Text color={P.accent}>{`   ⎇ ${branch}`}</Text> : null}
               {p.sessions.map(sessionRow)}
             </Box>
           )
         })
       )}
+      {liveAgents.length > 0 ? (
+        <Box key="agents" flexDirection="column">
+          <Text color={P.faint}>{t.agentsHeader}</Text>
+          {liveAgents.slice(0, 8).map(({ c, a }) => {
+            const st = agentState(a.status, a.waiting)
+            const isDone = isAgentUnseen(c, a)
+            const mark = glyphOf(st, isDone)
+            return (
+              <Box key={`la-${c.sessionId}-${a.id}`} justifyContent="space-between" columnGap={1}>
+                <Box flexShrink={1}>
+                  <Text color={mark.color}>{` ${mark.glyph} `}</Text>
+                  <Button
+                    plain
+                    key={`row-agent-${c.sessionId}-${a.id}`}
+                    label={short(a.type, Math.max(8, listWidth - 16))}
+                    onPress={() => act.go({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
+                  />
+                </Box>
+                <Text color={st === 'waiting' ? P.waiting : isDone ? P.accent : P.faint}>{wordOf(st, isDone)}</Text>
+              </Box>
+            )
+          })}
+          {liveAgents.length > 8 ? <Text color={P.faint}>{`   +${liveAgents.length - 8}`}</Text> : null}
+        </Box>
+      ) : null}
     </Box>
   )
 

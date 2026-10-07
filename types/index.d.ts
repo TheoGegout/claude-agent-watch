@@ -39,6 +39,8 @@ export type SessionCard = {
   sessionId: string
   /** The desktop app's id of the session (`local_…`), which a deep link opens. */
   hostId?: string
+  /** The git branch its folder is on, when it is in a repository. */
+  branch?: string
   cwd: string
   title: string
   state: LoopState
@@ -77,6 +79,9 @@ export type SessionConvo = {
   answerAt?: string
   /** Its last tool calls, newest last. */
   tools: { name: string; detail: string; at?: string }[]
+  /** The context's size at its last request, and the model that answered it. */
+  ctx?: number
+  model?: string
   error?: string
 }
 
