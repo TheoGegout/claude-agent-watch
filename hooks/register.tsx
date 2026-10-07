@@ -12,6 +12,10 @@ const COMMAND = 'agent-watch'
 const VERSION = '0.3.0'
 // The board is read again every second: what the registry says, as it says it.
 const TICK_MS = 1000
+// Each redraw replaces the pane's buttons, and a click that spans one is lost: the clocks on the
+// board move this often, the rest only when something changed.
+const CLOCK_RUNNING_MS = 10_000
+const CLOCK_IDLE_MS = 30_000
 // A busy conversation is read again at most this often (its transcript can be large).
 const CONVO_MS = 4000
 // A session that has not written for this long is closed (or its app is).
@@ -362,7 +366,11 @@ async function readAll($: EngineInterface) {
 
   const rank: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
   sessions.sort((a, b) => rank[liveState(a)] - rank[liveState(b)] || b.since - a.since)
-  await update($, board, () => ({ now, sessions }))
+  const before = await read($, board)
+  const isRunning = sessions.some(c => liveState(c) === 'running' || liveState(c) === 'waiting')
+  const isChanged = JSON.stringify(before.sessions) !== JSON.stringify(sessions)
+  const isClockDue = now - before.now >= (isRunning ? CLOCK_RUNNING_MS : CLOCK_IDLE_MS)
+  if (isChanged || isClockDue) await update($, board, () => ({ now, sessions }))
   await update($, seen, marks => {
     const missing = sessions.filter(c => marks[c.sessionId] === undefined)
     if (missing.length === 0) return marks
@@ -603,8 +611,13 @@ async function tick($: EngineInterface) {
   await readAll($).catch(err => $.ui.log(`agent-watch: could not read: ${err}`, { to: 'debug' }))
   const at = await read($, route)
   if (at.view !== 'list') {
-    const now = await $.clock.now()
-    await update($, seen, marks => ({ ...marks, [at.sessionId]: now }))
+    const looked = (await read($, board)).sessions.find(c => c.sessionId === at.sessionId)
+    const marks = await read($, seen)
+    const newest = Math.max(looked?.since ?? 0, ...(looked?.agents.map(a => a.endedAt ?? 0) ?? []))
+    if (looked && newest > (marks[at.sessionId] ?? 0)) {
+      const now = await $.clock.now()
+      await update($, seen, all => ({ ...all, [at.sessionId]: now }))
+    }
   }
   if (at.view === 'session') await loadConvo($, at.sessionId, false).catch(() => {})
 }

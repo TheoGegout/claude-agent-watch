@@ -128,9 +128,8 @@ const prettyPath = (path: string, home: string) => {
 /** The deep link the desktop app answers by opening that session. */
 const language = (t: Strings) => (t.languageName === 'Français' ? 'FR' : 'EN')
 
-const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
-/** The working mark: a spinner that turns with the board's one-second refresh. */
-export const spinner = (now: number) => SPIN[Math.floor(now / 1000) % SPIN.length]!
+/** The working mark. It stands still: a spinner would redraw the pane, and drop clicks, every second. */
+export const spinner = (_now: number) => '●'
 
 export const sessionLink = (hostId: string) => `claude://code/continue?session=${encodeURIComponent(hostId)}`
 

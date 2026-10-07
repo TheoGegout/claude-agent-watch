@@ -341,7 +341,7 @@ test('a session that finished since you last looked reads as done, until you ope
 
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect(await ui.find({ text: /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] $/ })).toBeDefined()
+  expect(await ui.find({ text: /^● $/ })).toBeDefined()
 
   // It finishes while you look elsewhere.
   await clock.advance(10_000)
