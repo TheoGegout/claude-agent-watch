@@ -75,6 +75,12 @@ export type Strings = {
   tokensOut: (n: string) => string
   tokensCtx: (n: string) => string
   textHeader: (running: number, waiting: number, idle: number) => string
+  done: string
+  sessionsTitle: string
+  keys: string
+  next: string
+  previous: string
+  pickOne: string
 }
 
 export const STRINGS: Record<'en' | 'fr', Strings> = {
@@ -152,6 +158,12 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     tokensOut: n => `${n} out`,
     tokensCtx: n => `ctx ${n}`,
     textHeader: (r, w, i) => `Agent Watch — ${r} running · ${w} waiting · ${i} idle`,
+    done: 'DONE',
+    sessionsTitle: 'SESSIONS',
+    keys: 'click or j/k to move · o open in the app · b back',
+    next: 'j ↓',
+    previous: 'k ↑',
+    pickOne: 'Pick a session on the left.',
   },
   fr: {
     state: { running: 'en cours', waiting: 'attend ta réponse', idle: 'inactif', ended: 'terminé' },
@@ -227,5 +239,11 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     tokensOut: n => `${n} générés`,
     tokensCtx: n => `ctx ${n}`,
     textHeader: (r, w, i) => `Agent Watch — ${r} en cours · ${w} en attente · ${i} inactifs`,
+    done: 'FINI',
+    sessionsTitle: 'SESSIONS',
+    keys: 'clic ou j/k pour naviguer · o ouvrir dans l’app · b retour',
+    next: 'j ↓',
+    previous: 'k ↑',
+    pickOne: 'Choisis une session à gauche.',
   },
 }

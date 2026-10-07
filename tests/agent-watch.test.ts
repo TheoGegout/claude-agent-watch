@@ -161,14 +161,21 @@ test('sessions without the mod show from the registry, with their subagents', as
     expect(await ui.find({ text: /D:\/Dev\/webshop/ })).toBeDefined()
     expect(await ui.find({ text: /Permission \/ input required/ })).toBeDefined()
     expect(await ui.find({ text: /AGENT WATCH/ })).toBeDefined()
-    expect(await ui.find({ text: /FILTERS/ })).toBeDefined()
+    // herdr's layout: projects on the left, one line a session, the waiting one selected.
+    expect(await ui.find({ text: /^webshop$/ })).toBeDefined()
+    expect(await ui.find({ key: 'session-me-session' })).toBeDefined()
+    expect(await ui.find({ key: 'row-agent-other-live' })).toBeDefined()
     expect(await ui.find({ key: 'set-language' })).toBeDefined()
     expect(await ui.find({ text: /permission Bash/ })).toBeDefined()
     expect(await ui.find({ text: /general-purpose · Run the e2e suite/ })).toBeDefined()
     expect(await ui.find({ text: /Bash · build the app/ })).toBeDefined()
     expect(await ui.find({ text: /Explore · Find the handlers/ })).toBeDefined()
-    expect(await ui.find({ text: /Explore · find the tests/ })).toBeDefined()
     expect(await ui.find({ text: /agent · old/ })).toBeUndefined()
+    // j moves the selection to the next session: its page replaces the detail.
+    await ui.press({ key: 'next' })
+    expect(await ui.find({ text: /Explore · find the tests/ })).toBeDefined()
+    await ui.press({ key: 'previous' })
+    expect(await ui.find({ text: /Permission \/ input required/ })).toBeDefined()
     await ui.unmount()
   }
   // Clicking through: a session, then one of its agents, then back.
@@ -191,21 +198,17 @@ test('sessions without the mod show from the registry, with their subagents', as
     expect(await ui.find({ text: /build the app/ })).toBeDefined()
     await ui.press({ key: 'back' })
     expect(await ui.find({ text: /SUBAGENTS · 3/ })).toBeDefined()
-    await ui.press({ key: 'back' })
     expect(await ui.find({ text: /Release notes/ })).toBeDefined()
     await ui.unmount()
   }
 
   // The filters: only the waiting session is left once pressed.
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  await ui.press({ key: 'filter-waiting' })
+  await ui.press({ key: 'count-waiting' })
   expect(await ui.find({ text: /Checkout flow/ })).toBeDefined()
   expect(await ui.find({ text: /Release notes/ })).toBeUndefined()
-  await ui.press({ key: 'filter-all' })
+  await ui.press({ key: 'count-waiting' })
   expect(await ui.find({ text: /Release notes/ })).toBeDefined()
-  // Folding a session hides its subagents.
-  await ui.press({ key: 'fold-other' })
-  expect(await ui.find({ text: /Run the e2e suite/ })).toBeUndefined()
   await ui.unmount()
 
   // Mine (busy in the registry, its Explore a1), and the other's two live agents; one waits.
@@ -252,7 +255,7 @@ test('speaks French when asked', { options: { language: 'fr' } }, async ($, on) 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ text: /attend ta réponse/ })).toBeDefined()
   expect(await ui.find({ text: /dialog open/ })).toBeDefined()
-  expect(await ui.find({ text: /FILTRES/ })).toBeDefined()
+  expect(await ui.find({ text: /Français/ })).toBeDefined()
 })
 
 test('the notification and the status line can be turned off', { options: { notifyWaiting: false, statusLine: false } }, async ($, on) => {
@@ -274,8 +277,12 @@ test('a narrow pane drops the sidebar for a filter row', async ($, on) => {
   await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...(PANE.props as object), bodyColumns: 60 } as never })
   expect(await ui.find({ text: /Narrow/ })).toBeDefined()
-  expect(await ui.find({ text: /FILTERS/ })).toBeUndefined()
-  expect(await ui.find({ key: 'filter-idle' })).toBeDefined()
+  // Narrow: the list alone; a session's page opens in its place.
+  expect(await ui.find({ text: /CONVERSATION/ })).toBeUndefined()
+  await ui.press({ key: 'session-other' })
+  expect(await ui.find({ text: /CONVERSATION/ })).toBeDefined()
+  await ui.press({ key: 'back' })
+  expect(await ui.find({ key: 'session-other' })).toBeDefined()
 })
 
 test('tokens, a slow tool, a silent agent, and the board as text', async ($, on) => {
@@ -320,4 +327,25 @@ test('tokens, a slow tool, a silent agent, and the board as text', async ($, on)
   expect(run.text).toContain('Checkout flow — D:/Dev/webshop')
   expect(run.text).toContain('└ ')
   expect(run.text).toContain('1.5k out · ctx 52k')
+})
+
+test('a session that finished since you last looked reads as done, until you open it', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, clock.now)
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:\\Dev\\webshop', name: 'Checkout flow', status: 'busy', statusUpdatedAt: NOW - 5_000 })
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ text: /^● $/ })).toBeDefined()
+
+  // It finishes while you look elsewhere.
+  await clock.advance(10_000)
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:\\Dev\\webshop', name: 'Checkout flow', status: 'idle', statusUpdatedAt: NOW + 10_000 })
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ text: /^✓ $/ })).toBeDefined()
+  expect(await ui.find({ text: /^DONE$/ })).toBeDefined()
+
+  // Opening it is looking at it.
+  await ui.press({ key: 'session-other' })
+  expect(await ui.find({ text: /^✓ $/ })).toBeUndefined()
 })

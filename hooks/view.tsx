@@ -14,6 +14,7 @@ export type ViewModel = {
   route: Route
   detail: AgentDetail | null
   convo: SessionConvo | null
+  seen: Record<string, number>
   mine: string
   home: string
   width: number
@@ -29,6 +30,7 @@ export type Actions = {
   setFilter: (filter: Filter) => void
   toggle: (sessionId: string) => void
   go: (route: Route) => void
+  openOpened: () => void
   openSession: (hostId: string) => void
   refresh: () => void
   toggleLanguage: () => void
@@ -38,9 +40,10 @@ export type Actions = {
 
 const RANK: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
 const FILTERS: Filter[] = ['all', 'running', 'waiting', 'idle', 'ended']
-const SIDEBAR = 30
-// The pane is wide enough for the sidebar beside the cards from here.
-const WIDE = 100
+// The session list, herdr's way: a column of its own beside the selected session.
+const SIDEBAR = 40
+// The pane is wide enough for the list beside the selected session from here.
+const WIDE = 96
 
 /** Colours by the app's theme keys, so the pane reads as part of it. */
 const THEME = {
@@ -132,6 +135,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   const P: Palette = THEME
   const isWide = vm.width >= WIDE
   const main = isWide ? vm.width - SIDEBAR - 3 : vm.width
+  const route = vm.route
 
   const counts: Record<LoopState, number> = { running: 0, waiting: 0, idle: 0, ended: 0 }
   for (const c of vm.sessions) counts[liveState(c)] += 1
@@ -274,81 +278,6 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       </Text>
     )
 
-  // ── list page ─────────────────────────────────────────────────────────
-  const sessionCard = (c: SessionCard) => {
-    const state = liveState(c)
-    const isMine = c.sessionId === vm.mine
-    const isFolded = vm.collapsed.includes(c.sessionId)
-    const when = c.state === 'ended' ? t.endedAgo(clock(now - c.updatedAt)) : t.since(clock(now - c.since))
-    return card(
-      `s-${c.sessionId}`,
-      state === 'waiting',
-      <Box flexDirection="column">
-        <Box justifyContent="space-between" columnGap={2}>
-          <Box flexShrink={1} columnGap={1}>
-            {dot(state)}
-            <Button
-              plain
-              key={`session-${c.sessionId}`}
-              label={short(c.title || t.newSession, Math.max(28, main - 24))}
-              onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
-            />
-            {isMine ? <Text color={P.dim}>{t.here.trim()}</Text> : null}
-            {badge(state, t.badge[state])}
-          </Box>
-          <Box columnGap={2} flexShrink={0}>
-            <Text color={P.dim}>{when}</Text>
-            {c.agents.length > 0 && (
-              <Button
-                plain
-                key={`fold-${c.sessionId}`}
-                label={isFolded ? `▾ ${c.agents.length}` : '▴'}
-                dimColor
-                onPress={() => act.toggle(c.sessionId)}
-              />
-            )}
-          </Box>
-        </Box>
-        <Box justifyContent="space-between" columnGap={2}>
-          <Text color={P.dim} wrap="truncate-start">
-            {`▢ ${prettyPath(c.cwd, vm.home)}`}
-          </Text>
-          {openLink(c, t.open)}
-        </Box>
-        <Box marginTop={1} flexDirection="column">
-          {statusBlock(c)}
-        </Box>
-        {c.agents.length > 0 && !isFolded && (
-          <Box
-            flexDirection="column"
-            marginTop={1}
-            borderStyle="round"
-            borderColor={P.line}
-            paddingX={1}
-          >
-            {c.agents.map(a => agentRow(c, a))}
-          </Box>
-        )}
-      </Box>,
-    )
-  }
-
-  const shown = vm.sessions.filter(c => vm.filter === 'all' || liveState(c) === vm.filter)
-  const listPage = (
-    <Box key="list" flexDirection="column" width={main}>
-      {vm.sessions.length === 0 ? (
-        <Text color={P.dim}>{t.noSessions}</Text>
-      ) : shown.length === 0 ? (
-        <Text color={P.dim}>{t.noMatch}</Text>
-      ) : (
-        <Box flexDirection="column">
-          <Text color={P.faint}>{t.hint}</Text>
-          {shown.map(sessionCard)}
-        </Box>
-      )}
-    </Box>
-  )
-
   // ── session page ──────────────────────────────────────────────────────
   const field = (name: string, value: string | null, key: string) =>
     value ? (
@@ -416,8 +345,8 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
     const state = liveState(c)
     return (
       <Box key="session" flexDirection="column" width={main}>
-        <Box justifyContent="space-between" marginBottom={1}>
-          {back({ view: 'list' })}
+        <Box justifyContent={isWide ? 'flex-end' : 'space-between'} marginBottom={1}>
+          {isWide ? null : back({ view: 'list' })}
           {openLink(c, t.openInApp)}
         </Box>
         {card(
@@ -524,116 +453,174 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
     )
   }
 
-  // ── which page ────────────────────────────────────────────────────────
-  const route = vm.route
-  const routed = route.view === 'list' ? undefined : vm.sessions.find(c => c.sessionId === route.sessionId)
-  const routedAgent =
-    route.view === 'agent' && routed ? routed.agents.find(a => a.id === route.agentId) : undefined
-  const page =
-    route.view === 'agent' && routed && routedAgent
-      ? agentPage(routed, routedAgent)
-      : route.view !== 'list' && routed
-        ? sessionPage(routed)
-        : listPage
+  // ── the list, herdr's way: by project, one line a session ────────────
+  /** Finished, or turned idle, since you last looked at it. */
+  const isUnseen = (c: SessionCard) =>
+    c.sessionId !== vm.mine &&
+    (c.state === 'idle' || c.state === 'ended') &&
+    c.since > (vm.seen[c.sessionId] ?? Number.POSITIVE_INFINITY)
+  const isAgentUnseen = (c: SessionCard, a: AgentCard) =>
+    agentState(a.status, a.waiting) === 'ended' && (a.endedAt ?? 0) > (vm.seen[c.sessionId] ?? Number.POSITIVE_INFINITY)
+  type Mark = { glyph: string; color: string | undefined }
+  const markOf = (state: LoopState, isDone: boolean): Mark =>
+    state === 'waiting'
+      ? { glyph: '◆', color: P.waiting }
+      : state === 'running'
+        ? { glyph: '●', color: P.running }
+        : isDone
+          ? { glyph: '✓', color: P.accent }
+          : { glyph: state === 'ended' ? '×' : '○', color: P.dim }
+  const sessionMark = (c: SessionCard) => markOf(liveState(c), isUnseen(c) || c.agents.some(a => isAgentUnseen(c, a)))
 
-  // ── sidebar ───────────────────────────────────────────────────────────
-  const filterName = (f: Filter) => (f === 'all' ? t.allSessions : t.filterName[f])
-  const sidebar = (
-    <Box key="side" flexDirection="column" width={SIDEBAR} rowGap={1}>
-      <Box flexDirection="column">
-        {label(t.filters)}
-        {FILTERS.map((f, i) => {
-          const isOn = vm.filter === f && route.view === 'list'
+  const shown = vm.sessions.filter(c => vm.filter === 'all' || liveState(c) === vm.filter)
+  const projectOf = (c: SessionCard) => c.cwd.replace(/\\/g, '/').replace(/\/$/, '').split('/').filter(Boolean).at(-1) ?? c.cwd
+  const projects: { name: string; sessions: SessionCard[] }[] = []
+  for (const c of shown) {
+    const name = projectOf(c)
+    const group = projects.find(p => p.name === name)
+    if (group) group.sessions.push(c)
+    else projects.push({ name, sessions: [c] })
+  }
+  const ordered = projects.flatMap(p => p.sessions)
+  const selectedId =
+    route.view !== 'list' ? route.sessionId : isWide ? ordered[0]?.sessionId : undefined
+  const selectedAt = ordered.findIndex(c => c.sessionId === selectedId)
+  const step = (by: number) => {
+    const next = ordered[Math.min(ordered.length - 1, Math.max(0, (selectedAt < 0 ? -1 : selectedAt) + by))]
+    if (next) act.go({ view: 'session', sessionId: next.sessionId })
+  }
+
+  const listWidth = isWide ? SIDEBAR : vm.width
+  const sessionRow = (c: SessionCard) => {
+    const mark = sessionMark(c)
+    const isOn = c.sessionId === selectedId
+    const state = c.state
+    const side =
+      state === 'waiting'
+        ? clock(now - c.since)
+        : state === 'running'
+          ? c.toolSince !== undefined
+            ? clock(now - c.toolSince)
+            : clock(now - c.since)
+          : isUnseen(c)
+            ? t.done
+            : clock(now - c.since)
+    const liveAgents = c.agents.filter(a => {
+      const s = agentState(a.status, a.waiting)
+      return s === 'running' || s === 'waiting' || isAgentUnseen(c, a)
+    })
+    return (
+      <Box key={`row-${c.sessionId}`} flexDirection="column">
+        <Box justifyContent="space-between" columnGap={1}>
+          <Box flexShrink={1}>
+            <Text color={P.accent}>{isOn ? '▌' : ' '}</Text>
+            <Text color={mark.color}>{`${mark.glyph} `}</Text>
+            <Button
+              plain
+              key={`session-${c.sessionId}`}
+              label={short(`${c.title || t.newSession}${c.sessionId === vm.mine ? t.here : ''}`, Math.max(12, listWidth - 14))}
+              dimColor={!isOn && state !== 'waiting' && state !== 'running' && !isUnseen(c)}
+              onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
+            />
+          </Box>
+          <Text color={state === 'waiting' ? P.waiting : P.faint} wrap="truncate-end">
+            {side}
+          </Text>
+        </Box>
+        {liveAgents.slice(0, 4).map((a, i) => {
+          const s = agentState(a.status, a.waiting)
+          const am = markOf(s, isAgentUnseen(c, a))
+          const branch = i === Math.min(liveAgents.length, 4) - 1 ? '└' : '├'
+          const elapsed =
+            a.startedAt === undefined ? '' : clock((s === 'ended' ? (a.endedAt ?? now) : now) - a.startedAt)
           return (
-            <Box key={`f-${f}`} justifyContent="space-between">
-              <Box>
-                <Text color={P.accent}>{isOn ? '▌' : ' '}</Text>
-                <Text color={f === 'all' ? P.accent : P[f]}>{f === 'all' ? '▣ ' : '● '}</Text>
+            <Box key={`row-${c.sessionId}-${a.id}`} justifyContent="space-between" columnGap={1}>
+              <Box flexShrink={1}>
+                <Text color={P.faint}>{`   ${branch} `}</Text>
+                <Text color={am.color}>{`${am.glyph} `}</Text>
                 <Button
                   plain
-                  key={`filter-${f}`}
-                  hotkey={String(i + 1)}
-                  label={filterName(f)}
-                  dimColor={!isOn}
-                  onPress={() => act.setFilter(f)}
+                  dimColor
+                  key={`row-agent-${c.sessionId}-${a.id}`}
+                  label={short(a.type, Math.max(8, listWidth - 18))}
+                  onPress={() => act.go({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
                 />
               </Box>
-              <Text color={isOn ? P.text : P.dim} bold={isOn}>
-                {String(f === 'all' ? vm.sessions.length : counts[f])}
-              </Text>
+              <Text color={P.faint}>{s === 'ended' ? t.done : elapsed}</Text>
             </Box>
           )
         })}
+        {liveAgents.length > 4 ? <Text color={P.faint}>{`     +${liveAgents.length - 4}`}</Text> : null}
       </Box>
-      <Box flexDirection="column">
-        {label(t.settings)}
-        {(
-          [
-            ['set-language', '◍', t.language, t.languageName, 'l', act.toggleLanguage],
-            ['set-notify', '◔', t.notifications, vm.notify ? t.on : t.off, 'n', act.toggleNotify],
-            ['set-status', '≡', t.statusLine, vm.statusLine ? t.on : t.off, 's', act.toggleStatusLine],
-          ] as const
-        ).map(([key, icon, name, value, hotkey, onPress]) => (
-          <Box key={key} justifyContent="space-between">
-            <Text color={P.text}>{`${icon} ${name}`}</Text>
-            <Button plain key={key} hotkey={hotkey} label={`${value} ›`} onPress={onPress} />
-          </Box>
-        ))}
-      </Box>
-      <Box flexDirection="column">
-        {label(t.shortcuts)}
-        <Button plain key="refresh" hotkey="r" label={t.refresh} onPress={act.refresh} />
-        <Text color={P.dim}>{`1-5  ${t.filterKeys}`}</Text>
-        <Text color={P.dim}>{`b    ${t.back.replace('← ', '')}`}</Text>
-        <Text color={P.dim}>{`esc  ${t.closeKeys}`}</Text>
-      </Box>
-      <Box flexDirection="column" borderStyle="round" borderColor={P.line} paddingX={1}>
-        <Text bold color={P.text}>
-          ⓘ Agent Watch
-        </Text>
-        <Text color={P.dim}>{`v${vm.version}`}</Text>
-        <Text color={P.dim}>{t.openSource}</Text>
-        <Link href="https://github.com/TheoGegout/claude-agent-watch" label="github.com/TheoGegout/claude-agent-watch" />
-      </Box>
+    )
+  }
+  const projectRollup = (sessions: SessionCard[]) => {
+    const all = sessions.map(sessionMark)
+    return (
+      all.find(m => m.glyph === '◆') ??
+      all.find(m => m.glyph === '●') ??
+      all.find(m => m.glyph === '✓') ??
+      all[0] ?? { glyph: '○', color: P.dim }
+    )
+  }
+  const list = (
+    <Box key="list" flexDirection="column" width={listWidth} flexShrink={0}>
+      {vm.sessions.length === 0 ? (
+        <Text color={P.dim}>{t.noSessions}</Text>
+      ) : shown.length === 0 ? (
+        <Text color={P.dim}>{t.noMatch}</Text>
+      ) : (
+        projects.map(p => {
+          const roll = projectRollup(p.sessions)
+          return (
+            <Box key={`p-${p.name}`} flexDirection="column" marginBottom={1}>
+              <Box justifyContent="space-between">
+                <Text bold color={P.text} wrap="truncate-end">
+                  {p.name}
+                </Text>
+                <Text color={roll.color}>{roll.glyph}</Text>
+              </Box>
+              {p.sessions.map(sessionRow)}
+            </Box>
+          )
+        })
+      )}
     </Box>
   )
 
-  // Narrow: the filters as one row under the header, no sidebar.
-  const filterBar = (
-    <Box key="filters" flexWrap="wrap" columnGap={2} marginBottom={1}>
-      {FILTERS.map((f, i) => (
-        <Box key={`fb-${f}`}>
-          <Text color={f === 'all' ? P.accent : P[f]}>{vm.filter === f ? '▌' : ' '}</Text>
-          <Button
-            plain
-            key={`filter-${f}`}
-            hotkey={String(i + 1)}
-            label={`${filterName(f)} ${f === 'all' ? vm.sessions.length : counts[f]}`}
-            dimColor={vm.filter !== f}
-            onPress={() => act.setFilter(f)}
-          />
-        </Box>
-      ))}
-      <Button plain key="refresh" hotkey="r" label={`⟳ ${t.refresh}`} dimColor onPress={act.refresh} />
-      <Button plain key="set-language" hotkey="l" label={t.languageName} dimColor onPress={act.toggleLanguage} />
-    </Box>
-  )
+  // ── the selected session, or agent ────────────────────────────────────
+  const routed = selectedId ? vm.sessions.find(c => c.sessionId === selectedId) : undefined
+  const routedAgent = route.view === 'agent' && routed ? routed.agents.find(a => a.id === route.agentId) : undefined
+  const detail =
+    routed && routedAgent ? agentPage(routed, routedAgent) : routed ? sessionPage(routed) : <Text color={P.faint}>{t.pickOne}</Text>
 
-  // ── footer ────────────────────────────────────────────────────────────
+  // ── footer: keys, settings, counts ────────────────────────────────────
   const footer = (
-    <Box key="footer" flexDirection="column">
+    <Box key="footer" flexDirection="column" marginTop={1}>
       {rule()}
       <Box justifyContent="space-between" flexWrap="wrap" columnGap={2}>
-        <Text color={P.dim}>
-          <Text color={P.running}>● </Text>
-          {`${t.footerRefresh}  │  ◔ ${t.footerNotifications(vm.notify)}`}
-        </Text>
+        <Box columnGap={2} flexWrap="wrap">
+          <Button plain key="next" hotkey="j" label={t.next} dimColor onPress={() => step(1)} />
+          <Button plain key="previous" hotkey="k" label={t.previous} dimColor onPress={() => step(-1)} />
+          {routed?.hostId ? <Button plain key="open-selected" hotkey="o" label={t.open} dimColor onPress={act.openOpened} /> : null}
+          <Button plain key="refresh" hotkey="r" label={`⟳ ${t.refresh}`} dimColor onPress={act.refresh} />
+          <Button plain key="set-language" hotkey="l" label={`◍ ${t.languageName}`} dimColor onPress={act.toggleLanguage} />
+          <Button
+            plain
+            key="set-notify"
+            hotkey="n"
+            label={`◔ ${t.notifications} ${vm.notify ? t.on : t.off}`}
+            dimColor
+            onPress={act.toggleNotify}
+          />
+        </Box>
         <Text>
           <Text color={P.running}>{`● ${loopsRunning} `}</Text>
           <Text color={P.dim}>{t.filterName.running.toLowerCase()}</Text>
           <Text color={P.dim}>{'  ·  '}</Text>
           <Text color={P.waiting}>{`${loopsWaiting} `}</Text>
           <Text color={P.dim}>{t.filterName.waiting.toLowerCase()}</Text>
+          <Text color={P.faint}>{`   v${vm.version}`}</Text>
         </Text>
       </Box>
     </Box>
@@ -644,13 +631,14 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       {header}
       {isWide ? (
         <Box key="body" columnGap={3} marginTop={1}>
-          {page}
-          {sidebar}
+          {list}
+          <Box key="detail" flexDirection="column" width={main}>
+            {detail}
+          </Box>
         </Box>
       ) : (
         <Box key="body" flexDirection="column" marginTop={1}>
-          {route.view === 'list' ? filterBar : null}
-          {page}
+          {route.view === 'list' ? list : detail}
         </Box>
       )}
       {footer}

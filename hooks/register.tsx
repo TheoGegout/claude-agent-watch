@@ -9,7 +9,7 @@ import type { Actions, Kit, ViewModel } from './view'
 
 const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
-const VERSION = '0.2.0'
+const VERSION = '0.3.0'
 // The board is read again every second: what the registry says, as it says it.
 const TICK_MS = 1000
 // A busy conversation is read again at most this often (its transcript can be large).
@@ -32,12 +32,14 @@ const collapsed = atom({ plugin: 'agent-watch', key: 'collapsed' } as const, [])
 const route = atom({ plugin: 'agent-watch', key: 'route' } as const, { view: 'list' } as Route)
 const detail = atom({ plugin: 'agent-watch', key: 'detail' } as const, null as AgentDetail | null)
 const convo = atom({ plugin: 'agent-watch', key: 'convo' } as const, null as SessionConvo | null)
+const seen = atom({ plugin: 'agent-watch', key: 'seen' } as const, {} as Record<string, number>)
 
 // The words shown, set from the `language` option at load.
 let t: Strings = STRINGS.en
 let language: 'en' | 'fr' = 'en'
 let notifyWaiting = true
 let showStatusLine = true
+let openOnStart = true
 
 // Tools whose whole run is the person answering.
 function askingReason(tool: string): string | undefined {
@@ -337,6 +339,11 @@ async function readAll($: EngineInterface) {
   const rank: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
   sessions.sort((a, b) => rank[liveState(a)] - rank[liveState(b)] || b.since - a.since)
   await update($, board, () => ({ now, sessions }))
+  await update($, seen, marks => {
+    const missing = sessions.filter(c => marks[c.sessionId] === undefined)
+    if (missing.length === 0) return marks
+    return { ...marks, ...Object.fromEntries(missing.map(c => [c.sessionId, now])) }
+  })
 
   // Status line and a toast when another session starts waiting on the person.
   let running = 0
@@ -538,6 +545,10 @@ async function tick($: EngineInterface) {
   await writeOwn($).catch(err => $.ui.log(`agent-watch: could not write: ${err}`, { to: 'debug' }))
   await readAll($).catch(err => $.ui.log(`agent-watch: could not read: ${err}`, { to: 'debug' }))
   const at = await read($, route)
+  if (at.view !== 'list') {
+    const now = await $.clock.now()
+    await update($, seen, marks => ({ ...marks, [at.sessionId]: now }))
+  }
   if (at.view === 'session') await loadConvo($, at.sessionId, false).catch(() => {})
 }
 
@@ -546,6 +557,7 @@ export const register: Register = (on, options) => {
   t = STRINGS[language]
   notifyWaiting = options.notifyWaiting !== false
   showStatusLine = options.statusLine !== false
+  openOnStart = options.openOnStart !== false
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -563,6 +575,8 @@ export const register: Register = (on, options) => {
     })
     $.clock.every(TICK_MS, () => void tick($))
     await tick($)
+    // The pane as the session list: opened by itself, where the surface seats it beside the transcript.
+    if (openOnStart && e.isInteractive) void $.ui.open({ id: PANE, title: t.paneTitle }).catch(() => {})
 
     return started
   })
@@ -666,6 +680,7 @@ export const register: Register = (on, options) => {
       route: await read($, route),
       detail: await read($, detail),
       convo: await read($, convo),
+      seen: await read($, seen),
       mine: sessionId,
       home,
       width,
@@ -684,10 +699,16 @@ export const register: Register = (on, options) => {
         void update($, collapsed, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id])),
       go: (to: Route) => {
         void update($, route, () => to)
+        if (to.view !== 'list') void $.clock.now().then(now => update($, seen, marks => ({ ...marks, [to.sessionId]: now })))
         if (to.view === 'agent') void loadDetail($, to.sessionId, to.agentId)
         if (to.view === 'session') void loadConvo($, to.sessionId, true)
       },
       openSession: (hostId: string) => void openInApp($, hostId),
+      openOpened: () => {
+        const at = vm.route.view !== 'list' ? vm.route.sessionId : undefined
+        const hostId = sessions.find(c => c.sessionId === at)?.hostId
+        if (hostId) void openInApp($, hostId)
+      },
       refresh: () => void tick($),
       toggleLanguage: () => setOption('language', language === 'fr' ? 'en' : 'fr'),
       toggleNotify: () => setOption('notifyWaiting', !notifyWaiting),

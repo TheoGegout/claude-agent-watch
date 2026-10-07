@@ -105,6 +105,8 @@ declare module 'claude-code' {
       route: Route
       detail: AgentDetail | null
       convo: SessionConvo | null
+      /** When each session was last looked at, to tell a finished one you have not seen. */
+      seen: Record<string, number>
     }
   }
 }

@@ -53,30 +53,24 @@ Mods are an early-access Claude Code feature and their API can change between re
 ## What you see
 
 ```
-◉ AGENT WATCH                                  ● 2 running  ● 1 waiting  ● 1 idle  ■ 0 ended  ⟳ Auto refresh 3s
-  Monitor your Claude Code agents in real time
-──────────────────────────────────────────────────────────────────────────────────────────────────────────────
-╭──────────────────────────────────────────────────────────────────────╮    FILTERS
-│ ● Fix the checkout flow   WAITING                 since 2m 14s   ▴   │   ▌▣ 1: All sessions           4
-│ ▢ ~/projects/webshop                                                 │    ● 2: Running                2
-│ ╭──────────────────────────────╮  ╭──────────────────────────────╮   │    ● 3: Waiting                1
-│ │ ⚠ Permission / input required│  │ ● general-purpose · e2e  RUNNING │    ● 4: Idle                   1
-│ │ permission Bash · Claude is …│  │   ▸ Bash · npx playwright test │    ● 5: Ended                  0
-│ ╰──────────────────────────────╯  ╰──────────────────────────────╯   │
-╰──────────────────────────────────────────────────────────────────────╯    SETTINGS
-                                                                             ◍ Language     l: English ›
-                                                                             ◔ Notifications     n: On ›
+◉ AGENT WATCH                        ● 2 running  ● 1 waiting  ● 3 idle  ■ 0 ended
+webshop                       ◆   │  ◆ Fix the checkout flow   WAITING   Open in the app ↗
+▌◆ Fix the checkout flow   1m 12s │  ╭ ⚠ Permission / input required ───────────────╮
+    ├ ● general-purpose    4m 02s │  │ permission Bash · Claude is waiting for you  │
+    └ ✓ Explore              DONE │  ╰──────────────────────────────────────────────╯
+ ○ Explore new UI          1h 12m │  CONVERSATION
+docs                          ●   │  You 10:02   Add the coupon field to checkout
+ ● Release notes (here)       12s │  Claude 10:03   The coupon field is in.
+compiler                      ✓   │  SUBAGENTS · 2
+ ✓ Refactor the parser       DONE │  ● general-purpose · Run the e2e suite   RUNNING
+j ↓  k ↑  o Open ↗  ⟳ Refresh  ◍ English  ◔ Notifications On      ● 3 running · 1 waiting
 ```
 
-| Part | Shows |
-| --- | --- |
-| **header** | how many sessions are running, waiting for you, idle or ended |
-| **cards** | one per session, the ones that need you first: a status badge, its folder, for how long; a callout when it waits for you (permission, question, plan approval); its subagents beside it with their badge, elapsed time and what they are doing. `▴` folds a card |
-| **sidebar** | from 104 columns: filters, settings that change `/config` in place, shortcuts, version. Narrower panes get the filters as one row |
-| **footer** | refresh rate, notifications, and the count of running and waiting loops across sessions |
+The sessions on the left, grouped by project, one line each, the way [herdr](https://github.com/herdrdev/herdr) lists its agents; the selected session's page on the right. A project's mark is its most urgent session's.
 
 | Mark | State | Means |
 | --- | --- | --- |
+| `✓` | **done** | finished, or turned idle, since you last opened it; opening it clears the mark |
 | `●` amber, `WAITING` | **waiting for you** | a permission dialog, a question (`AskUserQuestion`) or a plan to approve is open |
 | `●` green, `RUNNING` | **running** | the session or a subagent is working; the tool in use when known |
 | `●` grey, `IDLE` | **idle** | the turn is over, the session waits for your next message |
@@ -99,7 +93,9 @@ Focus the pane with `ctrl+x tab` (or click it), then:
 | --- | --- |
 | click a session / an agent | open its page |
 | `b` | back |
-| `1` … `5` | filter: all, running, waiting, idle, ended |
+| `j` / `k` | next / previous session |
+| `o` | open the selected session in the app |
+| click a count in the header | show only that state; again for all |
 | `r` | refresh now |
 | `l` | switch language (English / French) |
 | `n` | notifications on / off |
@@ -142,6 +138,7 @@ In `/config`, or under `pluginConfigs["agent-watch"].options` in `settings.json`
 | --- | --- | --- |
 | `language` | `en` | `en` or `fr` |
 | `notifyWaiting` | `true` | notify when another session starts waiting for you |
+| `openOnStart` | `true` | open the pane by itself when a session starts |
 | `statusLine` | `true` | show the running / waiting count in the status line |
 
 ## Troubleshooting

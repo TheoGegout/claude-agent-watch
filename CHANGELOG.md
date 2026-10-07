@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-07
+
+The pane as a session list, [herdr](https://github.com/herdrdev/herdr)'s way.
+
+- The sessions on the left, grouped by project, one line each with its state; the project rolls up the most urgent. Its running, waiting and freshly finished subagents hang under it.
+- Four states: ◆ blocked (waiting for you), ● working, ✓ done (finished since you last looked), ○ idle. Opening a session clears its ✓.
+- The selected session's page on the right: its state, its conversation, its subagents. `j` / `k` move the selection, `o` opens it in the app, `b` goes back. Narrow panes show the list alone and open a session in its place.
+- The pane opens by itself when a session starts (`openOnStart`, on by default), so it can stand in for the app's own list.
+- Settings and keys live in the footer; the header's counts filter the list.
+
 ## 0.2.0 — 2026-10-07
 
 A clickable panel in place of the plain list.

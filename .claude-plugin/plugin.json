@@ -1,6 +1,6 @@
 {
   "name": "agent-watch",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Agent Watch: one pane for every Claude Code session on your machine and its subagents, running, waiting for you, or idle",
   "author": {
     "name": "Théo Gégout",
@@ -31,6 +31,12 @@
     "notifyWaiting": {
       "title": "Notify when a session waits",
       "description": "Show a notification when another session starts waiting for your answer",
+      "type": "boolean",
+      "default": true
+    },
+    "openOnStart": {
+      "title": "Open on start",
+      "description": "Open the pane by itself when a session starts, as the list of your sessions",
       "type": "boolean",
       "default": true
     },
