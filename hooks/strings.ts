@@ -84,6 +84,8 @@ export type Strings = {
   next: string
   previous: string
   pickOne: string
+  thisSession: string
+  opening: (title: string) => string
 }
 
 export const STRINGS: Record<'en' | 'fr', Strings> = {
@@ -170,6 +172,8 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     next: 'j ↓',
     previous: 'k ↑',
     pickOne: 'Pick a session on the left.',
+    thisSession: 'this session',
+    opening: title => `Opening “${title}” in the app…`,
   },
   fr: {
     state: { running: 'en cours', waiting: 'attend ta réponse', idle: 'inactif', ended: 'terminé' },
@@ -254,5 +258,7 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     next: 'j ↓',
     previous: 'k ↑',
     pickOne: 'Choisis une session à gauche.',
+    thisSession: 'cette session',
+    opening: title => `Ouverture de « ${title} » dans l’app…`,
   },
 }

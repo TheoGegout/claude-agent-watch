@@ -563,13 +563,19 @@ async function notifySystem($: EngineInterface, title: string, body: string, hos
 /** Hands the app's deep link to the system, which gives it back to the app. */
 async function openInApp($: EngineInterface, hostId: string) {
   const url = sessionLink(hostId)
+  const title = (await read($, board)).sessions.find(c => c.hostId === hostId)?.title
+  $.ui.toast(t.opening(title || hostId))
   const isWindows = (await $.env.get('OS')) === 'Windows_NT'
   const argv = isWindows
     ? ['rundll32', 'url.dll,FileProtocolHandler', url]
     : (await $.env.get('XDG_CURRENT_DESKTOP')) !== undefined
       ? ['xdg-open', url]
       : ['open', url]
-  await $.process.run(argv, { timeoutMs: 10_000 }).catch(err => $.ui.toast(`agent-watch: ${err}`))
+  const run = await $.process.run(argv, { timeoutMs: 10_000 }).catch(err => {
+    $.ui.toast(`agent-watch: ${err}`)
+    return undefined
+  })
+  if (run && run.exitCode !== 0) $.ui.toast(`agent-watch: ${argv[0]} exited ${run.exitCode} ${run.stderr.trim()}`.trim())
 }
 
 async function tick($: EngineInterface) {
@@ -735,11 +741,6 @@ export const register: Register = (on, options) => {
         if (to.view === 'session') void loadConvo($, to.sessionId, true)
       },
       openSession: (hostId: string) => void openInApp($, hostId),
-      openOpened: () => {
-        const at = vm.route.view !== 'list' ? vm.route.sessionId : undefined
-        const hostId = sessions.find(c => c.sessionId === at)?.hostId
-        if (hostId) void openInApp($, hostId)
-      },
       refresh: () => void tick($),
       toggleLanguage: () => setOption('language', language === 'fr' ? 'en' : 'fr'),
       toggleNotify: () => setOption('notifyWaiting', !notifyWaiting),

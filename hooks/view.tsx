@@ -30,7 +30,6 @@ export type Actions = {
   setFilter: (filter: Filter) => void
   toggle: (sessionId: string) => void
   go: (route: Route) => void
-  openOpened: () => void
   openSession: (hostId: string) => void
   refresh: () => void
   toggleLanguage: () => void
@@ -173,6 +172,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   const rule = () => (vm.isTerminal ? <Text color={P.line}>{'─'.repeat(Math.max(0, Math.min(vm.width, 400)))}</Text> : null)
   const openLink = (c: SessionCard, text: string) => {
     const hostId = c.hostId
+    if (c.sessionId === vm.mine) return <Text color={P.faint}>{t.thisSession}</Text>
     return hostId ? (
       <Button plain key={`open-${c.sessionId}`} label={text} onPress={() => act.openSession(hostId)} />
     ) : null
@@ -497,7 +497,11 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   }
   const ordered = projects.flatMap(p => p.sessions)
   const selectedId =
-    route.view !== 'list' ? route.sessionId : isWide ? ordered[0]?.sessionId : undefined
+    route.view !== 'list'
+      ? route.sessionId
+      : isWide
+        ? (ordered.find(c => c.sessionId !== vm.mine) ?? ordered[0])?.sessionId
+        : undefined
   const selectedAt = ordered.findIndex(c => c.sessionId === selectedId)
   const step = (by: number) => {
     const next = ordered[Math.min(ordered.length - 1, Math.max(0, (selectedAt < 0 ? -1 : selectedAt) + by))]
@@ -632,7 +636,16 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
         <Box columnGap={2} flexWrap="wrap">
           <Button plain key="next" hotkey="j" label={t.next} dimColor onPress={() => step(1)} />
           <Button plain key="previous" hotkey="k" label={t.previous} dimColor onPress={() => step(-1)} />
-          {routed?.hostId ? <Button plain key="open-selected" hotkey="o" label={t.open} dimColor onPress={act.openOpened} /> : null}
+          {routed?.hostId && routed.sessionId !== vm.mine ? (
+            <Button
+              plain
+              key="open-selected"
+              hotkey="o"
+              label={t.open}
+              dimColor
+              onPress={() => routed.hostId && act.openSession(routed.hostId)}
+            />
+          ) : null}
           <Button plain key="refresh" hotkey="r" label={`⟳ ${t.refresh}`} dimColor onPress={act.refresh} />
           <Button plain key="set-language" hotkey="l" label={`◍ ${t.languageName}`} dimColor onPress={act.toggleLanguage} />
           <Button

@@ -366,3 +366,21 @@ test('herdr touches: the branch, the model and the context, numbered projects', 
   await ui.press({ key: 'project-1' })
   expect(await ui.find({ text: /opus-5-5  ·  ctx 52k/ })).toBeDefined()
 })
+
+test('o opens the selected session, never this one', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, clock.now)
+  w.put(`${REGISTRY}/1.json`, { sessionId: ME, cwd: 'D:\', name: 'Here', status: 'busy', hostSessionId: 'local_me-1' })
+  w.put(`${REGISTRY}/2.json`, { sessionId: 'other', cwd: 'D:\', name: 'Elsewhere', status: 'idle', hostSessionId: 'local_other-2' })
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Selected by default: the first session that is not this one.
+  await ui.press({ key: 'open-selected' })
+  expect(w.opened.at(-1)).toContain('session=local_other-2')
+  expect(w.toasts.at(-1)).toContain('Elsewhere')
+  // This session's page offers no opening of itself.
+  await ui.press({ key: 'session-me-session' })
+  expect(await ui.find({ text: /^this session$/ })).toBeDefined()
+  expect(await ui.find({ key: 'open-selected' })).toBeUndefined()
+})
