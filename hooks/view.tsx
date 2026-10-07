@@ -206,7 +206,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
               onPress={() => act.setFilter(vm.filter === s ? 'all' : s)}
             />
           ))}
-          <Button key="refresh-top" plain label={`⟳ ${t.autoRefresh} 3s`} dimColor onPress={act.refresh} />
+          <Button key="refresh-top" plain label={`⟳ ${t.autoRefresh} 1s`} dimColor onPress={act.refresh} />
         </Box>
       </Box>
       {rule()}
