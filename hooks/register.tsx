@@ -918,8 +918,10 @@ export const register: Register = (on, options) => {
       },
       toggle: (id: string) =>
         void update($, collapsed, list => (list.includes(id) ? list.filter(one => one !== id) : [...list, id])),
-      go: (to: Route) => {
-        void update($, route, () => to)
+      go: (to: Route, focusKey?: string) => {
+        void update($, route, () => to).then(() =>
+          focusKey ? $.ui.focus({ requestId: PANE, key: focusKey }).catch(() => undefined) : undefined,
+        )
         if (to.view !== 'list') void $.clock.now().then(now => update($, seen, marks => ({ ...marks, [to.sessionId]: now })))
         if (to.view === 'agent') void loadDetail($, to.sessionId, to.agentId, true)
         if (to.view === 'session') void loadConvo($, to.sessionId, true)

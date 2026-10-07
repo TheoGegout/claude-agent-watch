@@ -29,7 +29,8 @@ export type ViewModel = {
 export type Actions = {
   setFilter: (filter: Filter) => void
   toggle: (sessionId: string) => void
-  go: (route: Route) => void
+  /** Shows a page; `focusKey` is the element of the new page that takes the pane's focus. */
+  go: (route: Route, focusKey?: string) => void
   /** The session the wide pane shows without one being picked, so its page loads. */
   showing: (sessionId: string | undefined) => void
   openSession: (hostId: string) => void
@@ -192,7 +193,22 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       {children}
     </Box>
   )
-  const back = (to: Route) => <Button key="back" hotkey="b" label={t.back} onPress={() => act.go(to)} />
+  // A page change takes away the button just pressed, and the pane's focus with it: the next click
+  // would only give it back. The new page's own button takes the focus instead.
+  const nav = (to: Route) =>
+    act.go(
+      to,
+      to.view === 'agent'
+        ? 'back'
+        : to.view === 'session'
+          ? isWide
+            ? `more-${to.sessionId}`
+            : 'back'
+          : route.view !== 'list'
+            ? `more-${route.sessionId}`
+            : undefined,
+    )
+  const back = (to: Route) => <Button key="back" hotkey="b" label={t.back} onPress={() => nav(to)} />
 
   // ── header ────────────────────────────────────────────────────────────
   const header = (
@@ -244,7 +260,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
               plain
               key={`agent-${c.sessionId}-${a.id}`}
               label={short(`${a.type} · ${a.label}`, 70)}
-              onPress={() => act.go({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
+              onPress={() => nav({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
             />
           </Box>
           <Box columnGap={1} flexShrink={0}>
@@ -514,7 +530,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   act.showing(route.view === 'list' ? selectedId : undefined)
   const step = (by: number) => {
     const next = ordered[Math.min(ordered.length - 1, Math.max(0, (selectedAt < 0 ? -1 : selectedAt) + by))]
-    if (next) act.go({ view: 'session', sessionId: next.sessionId })
+    if (next) nav({ view: 'session', sessionId: next.sessionId })
   }
 
   const listWidth = isWide ? SIDEBAR : vm.width
@@ -542,7 +558,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
               // The title takes you there; this session, being here already, shows its details.
               c.hostId && c.sessionId !== vm.mine
                 ? act.openSession(c.hostId)
-                : act.go({ view: 'session', sessionId: c.sessionId })
+                : nav({ view: 'session', sessionId: c.sessionId })
             }
           />
         </Box>
@@ -555,7 +571,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             key={`more-${c.sessionId}`}
             label="⋯"
             dimColor={!isOn}
-            onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
+            onPress={() => nav({ view: 'session', sessionId: c.sessionId })}
           />
         </Box>
       </Box>
@@ -603,7 +619,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
                     label={p.name}
                     onPress={() => {
                       const first = p.sessions[0]
-                      if (first) act.go({ view: 'session', sessionId: first.sessionId })
+                      if (first) nav({ view: 'session', sessionId: first.sessionId })
                     }}
                   />
                 ) : (
@@ -634,7 +650,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
                     plain
                     key={`row-agent-${c.sessionId}-${a.id}`}
                     label={short(a.type, Math.max(8, listWidth - 16))}
-                    onPress={() => act.go({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
+                    onPress={() => nav({ view: 'agent', sessionId: c.sessionId, agentId: a.id })}
                   />
                 </Box>
                 <Text color={st === 'waiting' ? P.waiting : isDone ? P.accent : P.faint}>{wordOf(st, isDone)}</Text>
