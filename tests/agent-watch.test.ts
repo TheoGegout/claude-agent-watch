@@ -184,7 +184,12 @@ test('sessions without the mod show from the registry, with their subagents', as
     expect(await ui.find({ key: 'open-other' })).toBeDefined()
     await ui.press({ key: 'open-other' })
     expect(w.opened.at(-1)).toContain('claude://code/continue?session=local_abc-123')
+    // The title in the list does the same; ⋯ opens the details.
+    const before = w.opened.length
     await ui.press({ key: 'session-other' })
+    expect(w.opened.length).toBe(before + 1)
+    expect(w.opened.at(-1)).toContain('session=local_abc-123')
+    await ui.press({ key: 'more-other' })
     expect(await ui.find({ text: /SUBAGENTS · 3/ })).toBeDefined()
     expect(await ui.find({ text: /Open in the app/ })).toBeDefined()
     expect(await ui.find({ text: /^❯ $/ })).toBeDefined()
@@ -255,7 +260,7 @@ test('speaks French when asked', { options: { language: 'fr' } }, async ($, on) 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await ui.find({ text: /attend ta réponse/ })).toBeDefined()
   expect(await ui.find({ text: /dialog open/ })).toBeDefined()
-  expect(await ui.find({ text: /Français/ })).toBeDefined()
+  expect((await ui.find({ key: 'set-language' }))?.props.label).toBe('FR')
 })
 
 test('the notification and the status line can be turned off', { options: { notifyWaiting: false, statusLine: false } }, async ($, on) => {
@@ -279,7 +284,7 @@ test('a narrow pane drops the sidebar for a filter row', async ($, on) => {
   expect(await ui.find({ text: /Narrow/ })).toBeDefined()
   // Narrow: the list alone; a session's page opens in its place.
   expect(await ui.find({ text: /^D:\/x$/ })).toBeUndefined()
-  await ui.press({ key: 'session-other' })
+  await ui.press({ key: 'more-other' })
   expect(await ui.find({ text: /^D:\/x$/ })).toBeDefined()
   await ui.press({ key: 'back' })
   expect(await ui.find({ key: 'session-other' })).toBeDefined()
@@ -346,7 +351,7 @@ test('a session that finished since you last looked reads as done, until you ope
   expect(await ui.find({ text: /^done$/ })).toBeDefined()
 
   // Opening it is looking at it.
-  await ui.press({ key: 'session-other' })
+  await ui.press({ key: 'more-other' })
   expect(await ui.find({ text: /^✓ $/ })).toBeUndefined()
 })
 
@@ -380,7 +385,24 @@ test('o opens the selected session, never this one', async ($, on) => {
   expect(w.opened.at(-1)).toContain('session=local_other-2')
   expect(w.toasts.at(-1)).toContain('Elsewhere')
   // This session's page offers no opening of itself.
-  await ui.press({ key: 'session-me-session' })
+  await ui.press({ key: 'more-me-session' })
   expect(await ui.find({ text: /^this session$/ })).toBeDefined()
   expect(await ui.find({ key: 'open-selected' })).toBeUndefined()
+})
+
+test('n turns notifications off and on, says so, and keeps the choice', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  mock.store(on)
+  const w = world(on, clock.now)
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:/', name: 'Elsewhere', status: 'idle' })
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /🔔 Notifications ON/ })).toBeDefined()
+  await ui.press({ key: 'set-notify' })
+  expect(await ui.find({ text: /🔕 Notifications OFF/ })).toBeDefined()
+  expect(w.toasts.at(-1)).toContain('off')
+  // A session that starts later reads the choice back.
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  expect(await ui.find({ text: /🔕 Notifications OFF/ })).toBeDefined()
 })

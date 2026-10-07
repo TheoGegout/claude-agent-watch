@@ -126,6 +126,8 @@ const prettyPath = (path: string, home: string) => {
 }
 
 /** The deep link the desktop app answers by opening that session. */
+const language = (t: Strings) => (t.languageName === 'Français' ? 'FR' : 'EN')
+
 const SPIN = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 /** The working mark: a spinner that turns with the board's one-second refresh. */
 export const spinner = (now: number) => SPIN[Math.floor(now / 1000) % SPIN.length]!
@@ -195,26 +197,31 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
   const header = (
     <Box key="header" flexDirection="column">
       <Box justifyContent="space-between" flexWrap="wrap" columnGap={2}>
-        <Box flexDirection="column">
-          <Text>
-            <Text color={P.accent}>◉ </Text>
-            <Text bold color={P.text}>
-              AGENT WATCH
-            </Text>
+        <Text>
+          <Text color={P.accent}>◉ </Text>
+          <Text bold color={P.text}>
+            AGENT WATCH
           </Text>
-          <Text color={P.dim}>{t.subtitle}</Text>
-        </Box>
+          <Text color={P.faint}>{`  ${t.sessionsCount(vm.sessions.length)}`}</Text>
+        </Text>
         <Box columnGap={2} flexWrap="wrap" alignItems="center">
-          {(['running', 'waiting', 'idle', 'ended'] as const).map(s => (
-            <Button
-              key={`count-${s}`}
-              plain
-              label={`${s === 'ended' ? '■' : '●'} ${counts[s]} ${t.filterName[s].toLowerCase()}`}
-              dimColor={counts[s] === 0}
-              onPress={() => act.setFilter(vm.filter === s ? 'all' : s)}
-            />
-          ))}
-          <Button key="refresh-top" plain label={`⟳ ${t.autoRefresh} 1s`} dimColor onPress={act.refresh} />
+          {(['waiting', 'running', 'idle'] as const).map(s => {
+            const glyph = s === 'waiting' ? '◆' : s === 'running' ? '●' : '○'
+            const isOn = vm.filter === s
+            return (
+              <Box key={`count-box-${s}`}>
+                <Text color={counts[s] === 0 ? P.faint : P[s]}>{`${glyph} `}</Text>
+                <Button
+                  key={`count-${s}`}
+                  plain
+                  label={`${counts[s]} ${t.word[s === 'waiting' ? 'blocked' : s === 'running' ? 'working' : 'idle']}${isOn ? ' ✕' : ''}`}
+                  dimColor={counts[s] === 0 && !isOn}
+                  onPress={() => act.setFilter(isOn ? 'all' : s)}
+                />
+              </Box>
+            )
+          })}
+          <Button key="notify-top" plain label={vm.notify ? '🔔' : '🔕'} dimColor={!vm.notify} onPress={act.toggleNotify} />
         </Box>
       </Box>
       {rule()}
@@ -527,12 +534,28 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
           <Button
             plain
             key={`session-${c.sessionId}`}
-            label={short(`${c.title || t.newSession}${c.sessionId === vm.mine ? t.here : ''}`, Math.max(12, listWidth - 16))}
+            label={short(`${c.title || t.newSession}${c.sessionId === vm.mine ? t.here : ''}`, Math.max(12, listWidth - 20))}
             dimColor={!isOn && state !== 'waiting' && state !== 'running' && !isDone}
+            onPress={() =>
+              // The title takes you there; this session, being here already, shows its details.
+              c.hostId && c.sessionId !== vm.mine
+                ? act.openSession(c.hostId)
+                : act.go({ view: 'session', sessionId: c.sessionId })
+            }
+          />
+        </Box>
+        <Box flexShrink={0} columnGap={1}>
+          <Text color={state === 'waiting' ? P.waiting : state === 'running' ? P.running : isDone ? P.accent : P.faint}>
+            {wordOf(state, isDone)}
+          </Text>
+          <Button
+            plain
+            key={`more-${c.sessionId}`}
+            label="⋯"
+            dimColor={!isOn}
             onPress={() => act.go({ view: 'session', sessionId: c.sessionId })}
           />
         </Box>
-        <Text color={state === 'waiting' ? P.waiting : isDone ? P.accent : P.faint}>{wordOf(state, isDone)}</Text>
       </Box>
     )
   }
@@ -634,8 +657,8 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       {rule()}
       <Box justifyContent="space-between" flexWrap="wrap" columnGap={2}>
         <Box columnGap={2} flexWrap="wrap">
-          <Button plain key="next" hotkey="j" label={t.next} dimColor onPress={() => step(1)} />
-          <Button plain key="previous" hotkey="k" label={t.previous} dimColor onPress={() => step(-1)} />
+          <Button plain key="next" hotkey="j" label="↓" dimColor onPress={() => step(1)} />
+          <Button plain key="previous" hotkey="k" label="↑" dimColor onPress={() => step(-1)} />
           {routed?.hostId && routed.sessionId !== vm.mine ? (
             <Button
               plain
@@ -646,16 +669,19 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
               onPress={() => routed.hostId && act.openSession(routed.hostId)}
             />
           ) : null}
-          <Button plain key="refresh" hotkey="r" label={`⟳ ${t.refresh}`} dimColor onPress={act.refresh} />
-          <Button plain key="set-language" hotkey="l" label={`◍ ${t.languageName}`} dimColor onPress={act.toggleLanguage} />
-          <Button
-            plain
-            key="set-notify"
-            hotkey="n"
-            label={`◔ ${t.notifications} ${vm.notify ? t.on : t.off}`}
-            dimColor
-            onPress={act.toggleNotify}
-          />
+          <Button plain key="refresh" hotkey="r" label="⟳" dimColor onPress={act.refresh} />
+          <Button plain key="set-language" hotkey="l" label={language(t)} dimColor onPress={act.toggleLanguage} />
+          <Box>
+            <Text color={vm.notify ? P.running : P.faint}>{vm.notify ? '● ' : '○ '}</Text>
+            <Button
+              plain
+              key="set-notify"
+              hotkey="n"
+              label={vm.notify ? t.notifyOn : t.notifyOff}
+              dimColor={!vm.notify}
+              onPress={act.toggleNotify}
+            />
+          </Box>
         </Box>
         <Text>
           <Text color={P.running}>{`● ${loopsRunning} `}</Text>

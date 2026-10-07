@@ -578,6 +578,26 @@ async function openInApp($: EngineInterface, hostId: string) {
   if (run && run.exitCode !== 0) $.ui.toast(`agent-watch: ${argv[0]} exited ${run.exitCode} ${run.stderr.trim()}`.trim())
 }
 
+/** The person's own choices, made from the pane: they win over the manifest's defaults. */
+async function loadPreferences($: EngineInterface) {
+  const kept = (await $.store.get('preferences').catch(() => undefined)) as
+    | { notifyWaiting?: boolean; statusLine?: boolean; language?: 'en' | 'fr' }
+    | undefined
+  if (kept?.notifyWaiting !== undefined) notifyWaiting = kept.notifyWaiting
+  if (kept?.statusLine !== undefined) showStatusLine = kept.statusLine
+  if (kept?.language === 'en' || kept?.language === 'fr') {
+    language = kept.language
+    t = STRINGS[language]
+  }
+}
+
+async function savePreferences($: EngineInterface) {
+  await $.store
+    .set('preferences', { notifyWaiting, statusLine: showStatusLine, language })
+    .catch(err => $.ui.log(`agent-watch: could not save preferences: ${err}`, { to: 'debug' }))
+  $.ui.invalidate('ui.render')
+}
+
 async function tick($: EngineInterface) {
   await writeOwn($).catch(err => $.ui.log(`agent-watch: could not write: ${err}`, { to: 'debug' }))
   await readAll($).catch(err => $.ui.log(`agent-watch: could not read: ${err}`, { to: 'debug' }))
@@ -598,6 +618,7 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
+    await loadPreferences($)
     home = ((await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME')) ?? '').replace(/\\/g, '/')
     folder = `${home}/.claude/agent-watch`
     sessionId = await $.session.id()
@@ -706,8 +727,6 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { now, sessions } = await read($, board)
     const width = Math.max(40, e.props.bodyColumns ?? e.viewport?.columns ?? 80)
-    const setOption = (key: string, value: string | boolean) =>
-      void $.config.set({ key: `agent-watch.${key}`, value }).catch(() => {})
 
     const vm: ViewModel = {
       now,
@@ -742,11 +761,21 @@ export const register: Register = (on, options) => {
       },
       openSession: (hostId: string) => void openInApp($, hostId),
       refresh: () => void tick($),
-      toggleLanguage: () => setOption('language', language === 'fr' ? 'en' : 'fr'),
-      toggleNotify: () => setOption('notifyWaiting', !notifyWaiting),
+      toggleLanguage: () => {
+        language = language === 'fr' ? 'en' : 'fr'
+        t = STRINGS[language]
+        $.ui.toast(t.languageIs)
+        void savePreferences($)
+      },
+      toggleNotify: () => {
+        notifyWaiting = !notifyWaiting
+        $.ui.toast(t.notifyIs(notifyWaiting))
+        void savePreferences($)
+      },
       toggleStatusLine: () => {
-        if (showStatusLine) $.ui.status(undefined)
-        setOption('statusLine', !showStatusLine)
+        showStatusLine = !showStatusLine
+        if (!showStatusLine) $.ui.status(undefined)
+        void savePreferences($)
       },
     }
 

@@ -86,6 +86,12 @@ export type Strings = {
   pickOne: string
   thisSession: string
   opening: (title: string) => string
+  notifyOn: string
+  notifyOff: string
+  notifyIs: (isOn: boolean) => string
+  languageIs: string
+  details: string
+  sessionsCount: (n: number) => string
 }
 
 export const STRINGS: Record<'en' | 'fr', Strings> = {
@@ -174,6 +180,12 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     pickOne: 'Pick a session on the left.',
     thisSession: 'this session',
     opening: title => `Opening “${title}” in the app…`,
+    notifyOn: '🔔 Notifications ON',
+    notifyOff: '🔕 Notifications OFF',
+    notifyIs: isOn => (isOn ? '🔔 Notifications are on: you will be told when a session waits for you' : '🔕 Notifications are off'),
+    languageIs: 'Agent Watch now speaks English',
+    details: 'Details',
+    sessionsCount: n => `${n} session${n > 1 ? 's' : ''}`,
   },
   fr: {
     state: { running: 'en cours', waiting: 'attend ta réponse', idle: 'inactif', ended: 'terminé' },
@@ -260,5 +272,11 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     pickOne: 'Choisis une session à gauche.',
     thisSession: 'cette session',
     opening: title => `Ouverture de « ${title} » dans l’app…`,
+    notifyOn: '🔔 Notifications ON',
+    notifyOff: '🔕 Notifications OFF',
+    notifyIs: isOn => (isOn ? '🔔 Notifications activées : tu seras prévenu quand une session t’attend' : '🔕 Notifications désactivées'),
+    languageIs: 'Agent Watch parle maintenant français',
+    details: 'Détails',
+    sessionsCount: n => `${n} session${n > 1 ? 's' : ''}`,
   },
 }
