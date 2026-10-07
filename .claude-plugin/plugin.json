@@ -1,6 +1,6 @@
 {
   "name": "agent-watch",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Agent Watch: one pane for every Claude Code session on your machine and its subagents, running, waiting for you, or idle",
   "author": {
     "name": "Théo Gégout",

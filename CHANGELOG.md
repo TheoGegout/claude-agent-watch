@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-10-07
+
+- One click is enough: a button that changes the page (`⋯`, Back, a project's number) used to take the pane's focus away with it, so the next click only gave it back. The new page's own button now takes the focus.
+
+
 ## 0.3.0 — 2026-10-07
 
 The pane as a session list, [herdr](https://github.com/herdrdev/herdr)'s way.

@@ -9,7 +9,7 @@ import type { Actions, Kit, ViewModel } from './view'
 
 const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
-const VERSION = '0.3.0'
+const VERSION = '0.3.1'
 // The board is read again every second: what the registry says, as it says it.
 const TICK_MS = 1000
 // Each redraw replaces the pane's buttons, and a click that spans one is lost: the clocks on the
