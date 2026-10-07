@@ -1,10 +1,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentCard, AgentDetail, Board, Filter, LoopState, Route, SelfStatus, SessionCard, SessionConvo } from '../types'
+import type { AgentCard, AgentDetail, Board, Filter, LoopState, Route, SelfStatus, SessionCard, SessionConvo, Tokens } from '../types'
 import { STRINGS } from './strings'
 import type { Strings } from './strings'
-import { agentState, clock, drawApp, liveState, sessionLink } from './view'
+import { agentState, clock, drawApp, drawText, liveState, sessionLink } from './view'
 import type { Actions, Kit, ViewModel } from './view'
 
 const PANE = 'agent-watch'
@@ -106,6 +106,7 @@ async function writeOwn($: EngineInterface) {
     state: me.state,
     waiting: me.waiting,
     tool: me.tool,
+    toolSince: me.toolSince,
     since: me.since,
     updatedAt: now,
     agents,
@@ -126,13 +127,15 @@ type Registered = {
   statusUpdatedAt?: number
   hostSessionId?: string
 }
-type Verdict = { state: LoopState; tool?: string }
+type Verdict = { state: LoopState; tool?: string; toolSince?: number; tokens?: Tokens }
 
 const metaCache = new Map<string, { agentType?: string; description?: string }>()
-const tailCache = new Map<string, { mtimeMs: number; verdict: Verdict }>()
+const tailCache = new Map<string, { mtimeMs: number; readAt: number; verdict: Verdict }>()
 
 // A subagent writing to its transcript this recently is at work.
 const ACTIVE_MS = 30_000
+// A transcript that keeps changing is read again at most this often.
+const REREAD_MS = 5_000
 // A finished subagent stays on the board this long.
 const KEEP_AGENT_MS = 10 * 60_000
 // What one $.fs.read may copy.
@@ -148,27 +151,62 @@ async function readJson($: EngineInterface, path: string): Promise<unknown> {
   }
 }
 
-// What the last entries of a subagent's transcript say about it.
-function classifyTail(text: string): Verdict {
-  const lines = text.trimEnd().split('\n').slice(-6).reverse()
+type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+type Row = {
+  type?: string
+  uuid?: string
+  timestamp?: string
+  message?: { id?: string; stop_reason?: string | null; content?: unknown; usage?: Usage }
+}
+
+/**
+ * What a subagent's transcript says about it: where it stands from its last
+ * rows, the tool it is in and since when, and its tokens (generated in all
+ * when `isWhole`, the transcript read from its first line; its context's size).
+ */
+function classifyLines(lines: string[], isWhole: boolean): Verdict {
+  const seen = new Set<string>()
+  let out = 0
+  let ctx: number | undefined
+  let last: Row | undefined
   for (const line of lines) {
-    let entry: { type?: string; message?: { stop_reason?: string; content?: unknown } }
+    let row: Row
     try {
-      entry = JSON.parse(line)
+      row = JSON.parse(line)
     } catch {
       continue
     }
-    if (entry.type === 'assistant') {
-      const content = Array.isArray(entry.message?.content) ? entry.message.content : []
-      const call = content.find(
-        (c: { type?: string }) => c && c.type === 'tool_use',
-      ) as { name?: string; input?: Record<string, unknown> } | undefined
-      if (call?.name) return { state: 'running', tool: describeTool({ tool: call.name, ...(call.input ?? {}) }) }
-      return { state: entry.message?.stop_reason === 'end_turn' ? 'ended' : 'running' }
+    if (row.type !== 'assistant' && row.type !== 'user') continue
+    last = row
+    const usage = row.type === 'assistant' ? row.message?.usage : undefined
+    if (usage) {
+      // One response is written as one row per content block, all with its usage.
+      const id = row.message?.id ?? row.uuid ?? line
+      if (!seen.has(id)) {
+        seen.add(id)
+        out += usage.output_tokens ?? 0
+      }
+      ctx = (usage.input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0)
     }
-    if (entry.type === 'user') return { state: 'running' }
   }
-  return { state: 'running' }
+  const tokens: Tokens | undefined = ctx === undefined ? undefined : { out: isWhole ? out : undefined, ctx }
+  if (last?.type === 'assistant') {
+    const content = Array.isArray(last.message?.content) ? last.message.content : []
+    const call = content.find((c: { type?: string }) => c && c.type === 'tool_use') as
+      | { name?: string; input?: Record<string, unknown> }
+      | undefined
+    if (call?.name) {
+      const since = last.timestamp ? Date.parse(last.timestamp) : NaN
+      return {
+        state: 'running',
+        tool: describeTool({ tool: call.name, ...(call.input ?? {}) }),
+        toolSince: Number.isNaN(since) ? undefined : since,
+        tokens,
+      }
+    }
+    return { state: last.message?.stop_reason === 'end_turn' ? 'ended' : 'running', tokens }
+  }
+  return { state: 'running', tokens }
 }
 
 async function scanAgents($: EngineInterface, card: Registered, now: number): Promise<AgentCard[]> {
@@ -191,20 +229,14 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
     }
 
     let verdict: Verdict
-    if (quiet < ACTIVE_MS) {
-      verdict = { state: 'running' }
+    const cached = tailCache.get(path)
+    if (cached && (cached.mtimeMs === entry.mtimeMs || now - cached.readAt < REREAD_MS)) {
+      verdict = cached.verdict
     } else {
-      const cached = tailCache.get(path)
-      if (cached && cached.mtimeMs === entry.mtimeMs) {
-        verdict = cached.verdict
-      } else {
-        verdict =
-          entry.size <= READ_LIMIT
-            ? classifyTail(await $.fs.read(path).catch(() => ''))
-            : { state: quiet < 5 * 60_000 ? 'running' : 'ended' }
-        tailCache.set(path, { mtimeMs: entry.mtimeMs, verdict })
-      }
-      if (verdict.state === 'running' && !verdict.tool) verdict = { ...verdict, tool: t.quietFor(clock(quiet)) }
+      const isWhole = entry.size <= READ_LIMIT
+      const lines = await tailOf($, path, entry.size, isWhole ? Number.MAX_SAFE_INTEGER : 2000).catch(() => [] as string[])
+      verdict = lines.length > 0 ? classifyLines(lines, isWhole) : { state: quiet < 5 * 60_000 ? 'running' : 'ended' }
+      tailCache.set(path, { mtimeMs: entry.mtimeMs, readAt: now, verdict })
     }
     agents.push({
       id,
@@ -212,6 +244,9 @@ async function scanAgents($: EngineInterface, card: Registered, now: number): Pr
       type: meta.agentType ?? 'agent',
       status: verdict.state === 'running' ? 'running' : 'completed',
       tool: verdict.tool,
+      toolSince: verdict.toolSince,
+      tokens: verdict.tokens,
+      lastActivity: entry.mtimeMs,
       startedAt: spawned.get(`agent-${id}.meta.json`),
       endedAt: verdict.state === 'running' ? undefined : entry.mtimeMs,
     })
@@ -256,7 +291,17 @@ async function readAll($: EngineInterface) {
     const agents = [
       ...known.map(k => {
         const found = scanned.find(a => a.id === k.id)
-        return found ? { ...k, startedAt: found.startedAt, endedAt: found.endedAt } : k
+        return found
+          ? {
+              ...k,
+              startedAt: found.startedAt,
+              endedAt: found.endedAt,
+              lastActivity: found.lastActivity,
+              tokens: found.tokens,
+              toolSince: found.toolSince,
+              tool: k.tool ?? found.tool,
+            }
+          : k
       }),
       ...scanned.filter(a => !known.some(k => k.id === a.id)),
     ]
@@ -269,6 +314,7 @@ async function readAll($: EngineInterface) {
       state,
       waiting: state === 'waiting' ? (isFresh && report.waiting) || reg.waitingFor || t.waitingFallback : undefined,
       tool: state === 'running' && isFresh ? report.tool : undefined,
+      toolSince: state === 'running' && isFresh ? report.toolSince : undefined,
       since: reg.statusUpdatedAt ?? reg.updatedAt ?? reg.startedAt ?? now,
       updatedAt: reg.updatedAt ?? now,
       agents,
@@ -513,6 +559,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: COMMAND,
       description: t.commandDescription,
+      argumentHint: '[text]',
     })
     $.clock.every(TICK_MS, () => void tick($))
     await tick($)
@@ -520,8 +567,14 @@ export const register: Register = (on, options) => {
     return started
   })
 
-  on('command.run', { command: COMMAND }, async $ => {
+  on('command.run', { command: COMMAND }, async ($, e) => {
     await tick($)
+    // Text when asked, or where no surface draws a pane (a `-p` run, the SDK).
+    const surfaces = await $.session.surfaces().catch(() => [])
+    if (e.args.trim() === 'text' || surfaces.length === 0) {
+      const { now, sessions } = await read($, board)
+      return { text: drawText({ now, sessions, mine: sessionId, t }) }
+    }
     await $.ui.open({ id: PANE, title: t.paneTitle, focus: true })
 
     return { text: t.paneOpened }
@@ -550,7 +603,7 @@ export const register: Register = (on, options) => {
     const label = describeTool(e)
     const asking = askingReason(e.tool)
     if (agent === undefined) {
-      await setLoop($, asking ? 'waiting' : 'running', { tool: label, waiting: asking })
+      await setLoop($, asking ? 'waiting' : 'running', { tool: label, toolSince: await $.clock.now(), waiting: asking })
     } else {
       await setSelf($, s => ({
         ...s,
@@ -566,7 +619,7 @@ export const register: Register = (on, options) => {
       if (agent === undefined) {
         const me = await read($, self)
         if (me.state === 'waiting' || me.tool === label) {
-          await setLoop($, 'running', { tool: undefined, waiting: undefined })
+          await setLoop($, 'running', { tool: undefined, toolSince: undefined, waiting: undefined })
         }
       } else {
         await setSelf($, s => {

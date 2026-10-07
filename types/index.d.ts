@@ -23,7 +23,16 @@ export type AgentCard = {
   startedAt?: number
   /** When it last wrote, for one that ended. */
   endedAt?: number
+  /** When its transcript last changed. */
+  lastActivity?: number
+  /** When the tool call it is in started. */
+  toolSince?: number
+  /** Its tokens: generated (when the whole transcript was read) and its context's size. */
+  tokens?: Tokens
 }
+
+/** What a loop's requests cost: `out` generated in all, `ctx` the last request's input. */
+export type Tokens = { out?: number; ctx?: number }
 
 /** What one session writes to the shared folder, and the panel reads back. */
 export type SessionCard = {
@@ -35,6 +44,8 @@ export type SessionCard = {
   state: LoopState
   waiting?: string
   tool?: string
+  /** When the main loop's tool call started, where the session reports it. */
+  toolSince?: number
   since: number
   startedAt?: number
   updatedAt: number
@@ -75,6 +86,7 @@ export type SelfStatus = {
   state: LoopState
   waiting?: string
   tool?: string
+  toolSince?: number
   since: number
   agentTools: Record<string, string>
   agentWaiting: Record<string, string>

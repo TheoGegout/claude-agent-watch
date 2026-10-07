@@ -277,3 +277,47 @@ test('a narrow pane drops the sidebar for a filter row', async ($, on) => {
   expect(await ui.find({ text: /FILTERS/ })).toBeUndefined()
   expect(await ui.find({ key: 'filter-idle' })).toBeDefined()
 })
+
+test('tokens, a slow tool, a silent agent, and the board as text', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  const w = world(on, clock.now)
+  const iso = (ms: number) => new Date(ms).toISOString()
+  w.put(`${REGISTRY}/1.json`, { sessionId: 'other', cwd: 'D:\\Dev\\webshop', name: 'Checkout flow', status: 'busy' })
+  const subs = `${HOME}/.claude/projects/D--Dev-webshop/other/subagents`
+  const usage = (out: number) => ({ input_tokens: 2000, cache_read_input_tokens: 50_000, cache_creation_input_tokens: 0, output_tokens: out })
+  // Finished: two responses, the first written as two rows with one usage.
+  w.put(
+    `${subs}/agent-done.jsonl`,
+    [
+      { type: 'user', message: { content: 'Read the handlers' } },
+      { type: 'assistant', message: { id: 'm1', usage: usage(1200), content: [{ type: 'text', text: 'Looking' }] } },
+      { type: 'assistant', message: { id: 'm1', usage: usage(1200), content: [{ type: 'tool_use', name: 'Read', input: { file_path: 'a.ts' } }] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', content: 'ok' }] } },
+      { type: 'assistant', message: { id: 'm2', usage: usage(300), stop_reason: 'end_turn', content: [{ type: 'text', text: 'Done' }] } },
+    ].map(r => JSON.stringify(r)).join('\n'),
+    NOW - 60_000,
+  )
+  w.put(`${subs}/agent-done.meta.json`, { agentType: 'Explore', description: 'Read the handlers' })
+  // In a tool call for 90 s.
+  w.put(
+    `${subs}/agent-slow.jsonl`,
+    JSON.stringify({ type: 'assistant', timestamp: iso(NOW - 90_000), message: { id: 'm3', content: [{ type: 'tool_use', name: 'Bash', input: { description: 'run the e2e suite' } }] } }),
+    NOW - 40_000,
+  )
+  w.put(`${subs}/agent-slow.meta.json`, { agentType: 'general-purpose', description: 'Test' })
+  // Thinking, and nothing written for 150 s.
+  w.put(`${subs}/agent-mute.jsonl`, JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'x' }] } }), NOW - 150_000)
+  w.put(`${subs}/agent-mute.meta.json`, { agentType: 'Plan', description: 'Plan the release' })
+
+  await $.session.start({ cwd: 'D:/', surface: 'terminal', isInteractive: true })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(await ui.find({ text: /1\.5k out · ctx 52k/ })).toBeDefined()
+  expect(await ui.find({ text: /Bash · run the e2e suite · 1m 30s ⚠/ })).toBeDefined()
+  expect(await ui.find({ text: /⚠ silent for 2m 30s/ })).toBeDefined()
+
+  const run = await $.command.run({ command: 'agent-watch', args: 'text', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } } as never)
+  expect(run.text).toContain('Agent Watch — ')
+  expect(run.text).toContain('Checkout flow — D:/Dev/webshop')
+  expect(run.text).toContain('└ ')
+  expect(run.text).toContain('1.5k out · ctx 52k')
+})

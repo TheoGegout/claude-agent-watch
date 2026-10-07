@@ -71,6 +71,10 @@ export type Strings = {
   readingConvo: string
   noConvo: string
   notifyTitle: string
+  silentFor: (ago: string) => string
+  tokensOut: (n: string) => string
+  tokensCtx: (n: string) => string
+  textHeader: (running: number, waiting: number, idle: number) => string
 }
 
 export const STRINGS: Record<'en' | 'fr', Strings> = {
@@ -144,6 +148,10 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     readingConvo: 'Reading the conversation…',
     noConvo: 'No conversation yet.',
     notifyTitle: 'A Claude session is waiting for you',
+    silentFor: ago => `silent for ${ago}`,
+    tokensOut: n => `${n} out`,
+    tokensCtx: n => `ctx ${n}`,
+    textHeader: (r, w, i) => `Agent Watch — ${r} running · ${w} waiting · ${i} idle`,
   },
   fr: {
     state: { running: 'en cours', waiting: 'attend ta réponse', idle: 'inactif', ended: 'terminé' },
@@ -215,5 +223,9 @@ export const STRINGS: Record<'en' | 'fr', Strings> = {
     readingConvo: 'Lecture de la conversation…',
     noConvo: 'Pas encore de conversation.',
     notifyTitle: 'Une session Claude attend ta réponse',
+    silentFor: ago => `silencieux depuis ${ago}`,
+    tokensOut: n => `${n} générés`,
+    tokensCtx: n => `ctx ${n}`,
+    textHeader: (r, w, i) => `Agent Watch — ${r} en cours · ${w} en attente · ${i} inactifs`,
   },
 }

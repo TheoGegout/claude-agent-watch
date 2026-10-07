@@ -1,6 +1,6 @@
 import type { Elements, RenderElement } from 'claude-code'
 
-import type { AgentCard, AgentDetail, Filter, LoopState, Route, SessionCard, SessionConvo } from '../types'
+import type { AgentCard, AgentDetail, Filter, LoopState, Route, SessionCard, SessionConvo, Tokens } from '../types'
 import type { Strings } from './strings'
 
 export type Kit = Pick<Elements['terminal'], 'Box' | 'Text' | 'Button' | 'Link' | 'Markdown'>
@@ -82,6 +82,35 @@ export const clock = (ms: number) => {
   const m = Math.floor(s / 60)
   if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+// A tool call running this long, and a running agent silent this long, are flagged.
+export const SLOW_TOOL_MS = 30_000
+export const SILENT_MS = 120_000
+// Under this, a running agent writing nothing is just thinking.
+const QUIET_MS = 30_000
+
+/** `12.3k`, `1.2M`. */
+export const count = (n: number) =>
+  n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k` : `${(n / 1_000_000).toFixed(1)}M`
+
+export const tokensText = (tk: Tokens | undefined, t: Strings) =>
+  !tk ? '' : [tk.out !== undefined ? t.tokensOut(count(tk.out)) : '', tk.ctx !== undefined ? t.tokensCtx(count(tk.ctx)) : ''].filter(Boolean).join(' · ')
+
+/** What an agent is doing now, and whether it deserves a look (a slow tool, a long silence). */
+export function activityOf(a: AgentCard, now: number, t: Strings): { text?: string; isAlert: boolean } {
+  const state = agentState(a.status, a.waiting)
+  if (state === 'ended') return { text: tokensText(a.tokens, t) || undefined, isAlert: false }
+  if (a.waiting) return { text: a.waiting, isAlert: true }
+  if (a.tool) {
+    const took = a.toolSince === undefined ? undefined : now - a.toolSince
+    const isSlow = took !== undefined && took > SLOW_TOOL_MS
+    return { text: `${a.tool}${took !== undefined ? ` · ${clock(took)}` : ''}${isSlow ? ' ⚠' : ''}`, isAlert: isSlow }
+  }
+  const quiet = a.lastActivity === undefined ? 0 : now - a.lastActivity
+  if (quiet > SILENT_MS) return { text: `⚠ ${t.silentFor(clock(quiet))}`, isAlert: true }
+  if (quiet > QUIET_MS) return { text: t.quietFor(clock(quiet)), isAlert: false }
+  return { isAlert: false }
 }
 
 const short = (text: string, max: number) => {
@@ -189,7 +218,7 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
     const state = agentState(a.status, a.waiting)
     const elapsed =
       a.startedAt === undefined ? '' : clock((state === 'ended' ? (a.endedAt ?? now) : now) - a.startedAt)
-    const activity = state === 'ended' ? undefined : (a.waiting ?? a.tool)
+    const activity = activityOf(a, now, t)
     return (
       <Box key={`a-${a.id}`} flexDirection="column">
         <Box justifyContent="space-between" columnGap={1}>
@@ -207,9 +236,9 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             <Text color={P.dim}>{elapsed.padStart(7)}</Text>
           </Box>
         </Box>
-        {activity && (
-          <Text color={P.faint} wrap="truncate-end">
-            {`    ▸ ${activity}`}
+        {activity.text && (
+          <Text color={activity.isAlert ? P.waiting : P.faint} wrap="truncate-end">
+            {`    ${state === 'ended' ? '' : '▸ '}${activity.text}`}
           </Text>
         )}
       </Box>
@@ -229,7 +258,11 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
     ) : c.state === 'running' ? (
       <Text wrap="truncate-end">
         <Text color={P.running}>▸ </Text>
-        <Text color={P.dim}>{c.tool ?? t.state.running}</Text>
+        <Text color={c.toolSince !== undefined && now - c.toolSince > SLOW_TOOL_MS ? P.waiting : P.dim}>
+          {c.tool
+            ? `${c.tool}${c.toolSince !== undefined ? ` · ${clock(now - c.toolSince)}` : ''}${c.toolSince !== undefined && now - c.toolSince > SLOW_TOOL_MS ? ' ⚠' : ''}`
+            : t.state.running}
+        </Text>
       </Text>
     ) : c.state === 'idle' ? (
       <Text color={P.faint} wrap="truncate-end">
@@ -450,7 +483,8 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             <Box flexDirection="column" marginTop={1}>
               {field(t.sessionId, c.title || c.sessionId, 'g-session')}
               {field(t.duration, elapsed, 'g-elapsed')}
-              {field(t.currentTool, state === 'ended' ? null : (a.waiting ?? a.tool ?? null), 'g-tool')}
+              {field(t.currentTool, state === 'ended' ? null : (activityOf(a, now, t).text ?? null), 'g-tool')}
+              {field('Tokens', tokensText(a.tokens, t) || null, 'g-tokens')}
             </Box>
           </Box>,
         )}
@@ -622,4 +656,33 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
       {footer}
     </Box>
   )
+}
+
+/** The board as plain text: `/agent-watch text`, and wherever no pane can be drawn. */
+export function drawText(vm: Pick<ViewModel, 'now' | 'sessions' | 'mine' | 't'>): string {
+  const { t, now } = vm
+  const counts: Record<LoopState, number> = { running: 0, waiting: 0, idle: 0, ended: 0 }
+  for (const c of vm.sessions) counts[liveState(c)] += 1
+  const mark: Record<LoopState, string> = { running: '●', waiting: '◆', idle: '○', ended: '×' }
+  const lines = [t.textHeader(counts.running, counts.waiting, counts.idle), '']
+  if (vm.sessions.length === 0) lines.push(t.noSessions)
+  for (const c of vm.sessions) {
+    const state = liveState(c)
+    const when = c.state === 'ended' ? t.endedAgo(clock(now - c.updatedAt)) : t.since(clock(now - c.since))
+    const where = c.cwd.replace(/\\/g, '/')
+    lines.push(`${mark[state]} ${c.title || t.newSession}${c.sessionId === vm.mine ? t.here : ''} — ${where}   ${t.badge[state]} · ${when}`)
+    if (c.state === 'waiting') lines.push(`    ${t.inputRequired}${c.waiting ? `: ${c.waiting}` : ''}`)
+    else if (c.state === 'running' && c.tool) {
+      const took = c.toolSince === undefined ? '' : ` · ${clock(now - c.toolSince)}`
+      lines.push(`    ▸ ${c.tool}${took}`)
+    }
+    c.agents.forEach((a, i) => {
+      const s = agentState(a.status, a.waiting)
+      const branch = i === c.agents.length - 1 ? '└' : '├'
+      const elapsed = a.startedAt === undefined ? '' : ` · ${clock((s === 'ended' ? (a.endedAt ?? now) : now) - a.startedAt)}`
+      const activity = activityOf(a, now, t).text
+      lines.push(`  ${branch} ${mark[s]} ${a.type} · ${a.label}   ${t.badge[s]}${elapsed}${activity ? `   ${activity}` : ''}`)
+    })
+  }
+  return lines.join('\n')
 }

@@ -12,7 +12,9 @@ A clickable panel in place of the plain list.
 - The pane follows the app's own theme, on every surface.
 - The board refreshes every second instead of every three.
 - When another session starts waiting for you, a **system notification** with its sound (Windows toast, macOS notification, `notify-send` on Linux); clicking it on Windows opens that session. One session sends it, not each one running the mod.
-- Subagents show how long they ran, from their spawn time.
+- Subagents show how long they ran, from their spawn time, and once finished their tokens: generated in all and the context's size, read from their transcripts.
+- The tool call an agent (or the session) is in shows how long it has run; past 30 s it is flagged ⚠, and so is a running agent silent for 2 minutes.
+- `/agent-watch text` prints the board as text; a run with no pane to draw (`claude -p`, the SDK) gets it by itself.
 
 ## 0.1.0 — 2026-10-07
 

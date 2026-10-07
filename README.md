@@ -82,7 +82,7 @@ Mods are an early-access Claude Code feature and their API can change between re
 | `●` grey, `IDLE` | **idle** | the turn is over, the session waits for your next message |
 | `●` red, `ENDED` | **ended** | the subagent finished (kept 10 minutes), or the session closed |
 
-A subagent quiet on a long tool call shows `quiet for 2m 10s` rather than vanishing. The status line counts every running and waiting loop across sessions (`agents ▶ 3 running · ◆ 1 waiting`). When **another** session starts waiting for you, a notification shows in Claude Code and as a system notification with its sound; on Windows, clicking it opens that session.
+A subagent shows the tool call it is in and for how long; past 30 s it is flagged ⚠, and so is a running subagent that has written nothing for 2 minutes. Once finished, it shows its tokens: generated in all and the size of its context. The status line counts every running and waiting loop across sessions (`agents ▶ 3 running · ◆ 1 waiting`). When **another** session starts waiting for you, a notification shows in Claude Code and as a system notification with its sound; on Windows, clicking it opens that session.
 
 A session's page shows its conversation: your last message, Claude's last words, and its last tool calls, read from the end of its transcript and kept current while the page is open.
 
@@ -91,6 +91,7 @@ A session's page shows its conversation: your last message, Claude's last words,
 | Command | Does |
 | --- | --- |
 | `/agent-watch` | open the pane |
+| `/agent-watch text` | print the board as text (also what a run with no pane, such as `claude -p`, gets) |
 
 Focus the pane with `ctrl+x tab` (or click it), then:
 
@@ -128,6 +129,10 @@ It runs a process in these cases only:
 `claude plugin validate .` prints exactly what it hooks and calls.
 
 **What is inferred, not measured.** The session registry and the subagent transcripts are Claude Code internals, not a public API: a Claude Code update can change them, and the pane would then show less until the mod is updated. A subagent counts as running while it writes to its transcript, and is classified from its transcript's last entries once quiet for 30 seconds; a transcript over 4 MiB cannot be read by a mod, so it is judged by when it was last written.
+
+## Agent Watch and agent-flow
+
+[agent-flow](https://github.com/Charlie0113-T/claude-agent-flow) draws a live tree of **the current session's** subagents, from the engine's own events: precise, per tool call, terminal first. Agent Watch watches **every session on the machine**, including the ones that do not load it, and tells you which one needs you: the waiting ones come first, a system notification calls you, and **Open ↗** takes you there. They go well together.
 
 ## Configure
 
