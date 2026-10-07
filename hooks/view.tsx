@@ -17,8 +17,6 @@ export type ViewModel = {
   home: string
   width: number
   isTerminal: boolean
-  /** The full dashboard's address, once its server answers. */
-  dashboardUrl?: string
   t: Strings
   version: string
   notify: boolean
@@ -179,7 +177,6 @@ export function drawApp(el: Kit, vm: ViewModel, act: Actions) {
             />
           ))}
           <Button key="refresh-top" plain label={`⟳ ${t.autoRefresh} 3s`} dimColor onPress={act.refresh} />
-          {vm.dashboardUrl ? <Link href={vm.dashboardUrl} label={t.dashboard} /> : null}
         </Box>
       </Box>
       {rule()}

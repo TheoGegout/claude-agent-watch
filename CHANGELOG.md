@@ -2,7 +2,7 @@
 
 ## 0.2.0 — 2026-10-07
 
-A clickable dashboard in place of the plain list.
+A clickable panel in place of the plain list.
 
 - Header with the count of sessions running, waiting, idle and ended; each count filters.
 - One card per session: status badge, folder, how long it has been so, a callout when it waits for you, and its subagents with their badge, elapsed time and current activity. Cards fold (`▴`).
@@ -10,7 +10,6 @@ A clickable dashboard in place of the plain list.
 - **Open ↗** brings that session up in the Claude desktop app, through the app's `claude://code/continue` link.
 - Sidebar from 100 columns: filters (`1`–`5`), settings that change `/config` in place (`l` language, `n` notifications, `s` status line), shortcuts and version. Narrower panes get the filters as one row.
 - The pane follows the app's own theme, on every surface.
-- **Full dashboard ↗**: a local web page (`server/`, Node 18+) with the complete dashboard: cards, filters, session and subagent pages, live clocks, **Open in Claude** on every session. Started by the mod when you open the pane, on `http://localhost:47311`, for this machine only.
 - Subagents show how long they ran, from their spawn time.
 
 ## 0.1.0 — 2026-10-07

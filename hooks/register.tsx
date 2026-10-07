@@ -10,9 +10,6 @@ import type { Actions, Kit, ViewModel } from './view'
 const PANE = 'agent-watch'
 const COMMAND = 'agent-watch'
 const VERSION = '0.2.0'
-// The full dashboard's local server: one per machine, whichever session started it.
-const DASHBOARD_PORT = 47311
-const DASHBOARD_URL = `http://localhost:${DASHBOARD_PORT}`
 const TICK_MS = 3000
 // A session that has not written for this long is closed (or its app is).
 const STALE_MS = 20_000
@@ -68,10 +65,6 @@ let home = ''
 let sessionId = ''
 let cwd = ''
 let wasWaiting = new Set<string>()
-// Whether this session opened the pane, and so keeps the dashboard served.
-let wantsDashboard = false
-let isDashboardUp = false
-let isStartingDashboard = false
 
 function setSelf($: EngineInterface, fn: (s: SelfStatus) => SelfStatus) {
   return update($, self, fn)
@@ -285,10 +278,6 @@ async function readAll($: EngineInterface) {
   const rank: Record<LoopState, number> = { waiting: 0, running: 1, idle: 2, ended: 3 }
   sessions.sort((a, b) => rank[liveState(a)] - rank[liveState(b)] || b.since - a.since)
   await update($, board, () => ({ now, sessions }))
-  if (wantsDashboard) {
-    const page = { now, sessions, mine: sessionId, home, version: VERSION, language }
-    await $.fs.write(`${folder}/_board.json`, JSON.stringify(page)).catch(() => {})
-  }
 
   // Status line and a toast when another session starts waiting on the person.
   let running = 0
@@ -397,44 +386,9 @@ async function openInApp($: EngineInterface, hostId: string) {
   await $.process.run(argv, { timeoutMs: 10_000 }).catch(err => $.ui.toast(`agent-watch: ${err}`))
 }
 
-/** Starts the dashboard's server unless one already answers on its port. */
-async function ensureDashboard($: EngineInterface) {
-  if (isStartingDashboard) return
-  const ping = await $.http.fetch(`${DASHBOARD_URL}/api/ping`).catch(() => undefined)
-  isDashboardUp = ping?.ok === true && ping.text.includes('agent-watch')
-  if (isDashboardUp) return
-  isStartingDashboard = true
-  // The server lives as long as this loop: the session, or the module's next reload.
-  void (async () => {
-    try {
-      const server = $.process.spawn({
-        argv: ['node', `${$.plugin.root}/server/dashboard.mjs`, String(DASHBOARD_PORT)],
-      })
-      for await (const piece of server) {
-        if (piece.text.includes('dashboard on')) {
-          isDashboardUp = true
-          isStartingDashboard = false
-          $.ui.invalidate('ui.render')
-        }
-      }
-    } catch {
-      $.ui.toast(t.needsNode)
-    } finally {
-      isDashboardUp = false
-      isStartingDashboard = false
-    }
-  })()
-}
-
 async function tick($: EngineInterface) {
-  // The pane open, however it was (the command, a pane kept across a reload): serve the dashboard.
-  if (!wantsDashboard) {
-    const panes = await $.ui.panes().catch(() => [])
-    wantsDashboard = panes.some(pane => pane.id === PANE)
-  }
   await writeOwn($).catch(err => $.ui.log(`agent-watch: could not write: ${err}`, { to: 'debug' }))
   await readAll($).catch(err => $.ui.log(`agent-watch: could not read: ${err}`, { to: 'debug' }))
-  if (wantsDashboard && !isDashboardUp) await ensureDashboard($).catch(() => {})
 }
 
 export const register: Register = (on, options) => {
@@ -463,7 +417,6 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: COMMAND }, async $ => {
-    wantsDashboard = true
     await tick($)
     await $.ui.open({ id: PANE, title: t.paneTitle, focus: true })
 
@@ -559,7 +512,6 @@ export const register: Register = (on, options) => {
       home,
       width,
       isTerminal: e.surface === 'terminal',
-      dashboardUrl: isDashboardUp ? DASHBOARD_URL : undefined,
       t,
       version: VERSION,
       notify: notifyWaiting,
